@@ -104,11 +104,11 @@ def main(params):
                                     else:
                                         continue
 
-    if params.get_subdomains:
-        json.dump(dict_domains, open(params.dump_path + "domains_and_subdomains.json", 'wb'))
+    if params.get_subdomains_for_all_domains or params.get_subdomains_for_specific_domains:
+        json.dump(dict_domains, open(params.dump_path + "domains_and_subdomains.json", 'w'))
     if params.get_number_of_docs_per_domain:
         sorted_domains = sorted(docs_per_domain.items(), key=lambda item: item[1], reverse=True)
-        json.dump(sorted_domains, open(params.dump_path + "sorted_domains.json", 'wb'))
+        json.dump(sorted_domains, open(params.dump_path + "sorted_domains.json", 'w'))
 
 
 if __name__ == '__main__':
