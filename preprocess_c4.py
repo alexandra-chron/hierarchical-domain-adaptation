@@ -12,7 +12,7 @@ import argparse
       
     Example 2 - get sorted list of domains and the subdomains only for specific domains:
       python preprocess_c4.py --dump_path ./ --get_number_of_docs_per_domain True 
-      --get_subdomains_for_specific_domains ["journals.plos.org", "www.mdpi.com", "www.frontiersin.org", "www.springer.com"]
+      --get_subdomains_for_specific_domains "journals.plos.org" "www.mdpi.com" "www.frontiersin.org" "www.springer.com"
     '''
 
 
