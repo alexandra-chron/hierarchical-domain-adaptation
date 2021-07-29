@@ -33,30 +33,23 @@ from datasets import load_dataset
 
 import transformers
 from transformers import (
-    CONFIG_MAPPING,
     MODEL_FOR_CAUSAL_LM_MAPPING,
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoTokenizer,
     HfArgumentParser,
-    Trainer,
     TrainingArguments,
     default_data_collator,
-    set_seed,
+    set_seed, GPT2Tokenizer,
 )
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
-from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-
-# Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.10.0.dev0")
+from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel
+from transformers.models.gpt2.configuration_gpt2 import GPT2Config
+from transformers.trainer import Trainer
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
 
 logger = logging.getLogger(__name__)
-
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
@@ -302,53 +295,13 @@ def main():
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
 
-    config_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
-    }
-    if model_args.config_name:
-        config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
-    elif model_args.model_name_or_path:
-        config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
-    else:
-        config = CONFIG_MAPPING[model_args.model_type]()
-        logger.warning("You are instantiating a new config instance from scratch.")
-        if model_args.config_overrides is not None:
-            logger.info(f"Overriding config: {model_args.config_overrides}")
-            config.update_from_string(model_args.config_overrides)
+    config = GPT2Config.from_pretrained(model_args.model_name_or_path)
+    # TODO: use_adapters and adapter_size should be command-line arguments
+    config.use_adapters = False
 
-    tokenizer_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "use_fast": model_args.use_fast_tokenizer,
-        "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
-    }
-    if model_args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
-    elif model_args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
-    else:
-        raise ValueError(
-            "You are instantiating a new tokenizer from scratch. This is not supported by this script."
-            "You can do it from another script, save it, and load it from here, using --tokenizer_name."
-        )
-
-    if model_args.model_name_or_path:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
-    else:
-        model = AutoModelForCausalLM.from_config(config)
-        n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
-        logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
-
-    model.resize_token_embeddings(len(tokenizer))
+    tokenizer = GPT2Tokenizer.from_pretrained(model_args.model_name_or_path)
+    model = GPT2LMHeadModel.from_pretrained(model_args.model_name_or_path, config=config,
+                                            cache_dir=model_args.cache_dir)
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
@@ -434,22 +387,28 @@ def main():
         if "train" not in tokenized_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = lm_datasets["train"]
+        train_dataset_2 = lm_datasets["train"]
+
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
-
+            train_dataset_2 = train_dataset_2.select(range(data_args.max_train_samples))
+        train_datasets = [train_dataset, train_dataset_2]
     if training_args.do_eval:
         if "validation" not in tokenized_datasets:
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = lm_datasets["validation"]
+        eval_dataset_2 = lm_datasets["validation"]
+
         if data_args.max_eval_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
-
+            eval_dataset_2 = eval_dataset_2.select(range(data_args.max_eval_samples))
+        eval_datasets = [eval_dataset, eval_dataset_2]
     # Initialize our Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
+        train_dataset=[train_dataset, train_dataset_2] if training_args.do_train else None,
+        eval_dataset=[eval_dataset, eval_dataset_2] if training_args.do_eval else None,
         tokenizer=tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
         data_collator=default_data_collator,
@@ -466,11 +425,13 @@ def main():
         trainer.save_model()  # Saves the tokenizer too for easy upload
 
         metrics = train_result.metrics
-
+        len_train_dataset = 0
+        for dataset in train_datasets:
+            len_train_dataset += len(dataset)
         max_train_samples = (
-            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+            data_args.max_train_samples if data_args.max_train_samples is not None else len_train_dataset
         )
-        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
+        metrics["train_samples"] = min(max_train_samples, len_train_dataset)
 
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
@@ -481,9 +442,11 @@ def main():
         logger.info("*** Evaluate ***")
 
         metrics = trainer.evaluate()
-
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
+        len_eval_dataset = 0
+        for dataset in eval_datasets:
+            len_eval_dataset += len(dataset)
+        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len_eval_dataset
+        metrics["eval_samples"] = min(max_eval_samples, len_eval_dataset)
         try:
             perplexity = math.exp(metrics["eval_loss"])
         except OverflowError:
@@ -492,18 +455,6 @@ def main():
 
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
-
-    if training_args.push_to_hub:
-        kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-generation"}
-        if data_args.dataset_name is not None:
-            kwargs["dataset_tags"] = data_args.dataset_name
-            if data_args.dataset_config_name is not None:
-                kwargs["dataset_args"] = data_args.dataset_config_name
-                kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
-            else:
-                kwargs["dataset"] = data_args.dataset_name
-
-        trainer.push_to_hub(**kwargs)
 
 
 def _mp_fn(index):
