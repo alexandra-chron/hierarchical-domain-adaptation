@@ -19,9 +19,9 @@ from typing import Any, Mapping, Optional
 
 from transformers import PreTrainedTokenizer, TensorType, is_torch_available
 
-from ...configuration_utils import PretrainedConfig
-from ...onnx import OnnxConfigWithPast
-from ...utils import logging
+from transformers.configuration_utils import PretrainedConfig
+from transformers.onnx import OnnxConfigWithPast
+from transformers.utils import logging
 
 
 logger = logging.get_logger(__name__)
@@ -156,6 +156,8 @@ class GPT2Config(PretrainedConfig):
         use_cache=True,
         bos_token_id=50256,
         eos_token_id=50256,
+        use_adapters=False,
+        adapter_size=128,
         **kwargs
     ):
         super().__init__(bos_token_id=bos_token_id, eos_token_id=eos_token_id, **kwargs)
@@ -184,6 +186,9 @@ class GPT2Config(PretrainedConfig):
 
         self.bos_token_id = bos_token_id
         self.eos_token_id = eos_token_id
+
+        self.use_adapters = use_adapters
+        self.adapter_size = adapter_size
 
     @property
     def max_position_embeddings(self):

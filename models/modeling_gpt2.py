@@ -22,31 +22,31 @@ from typing import Optional, Tuple
 import torch
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn import CrossEntropyLoss, MSELoss, LayerNorm
 
-from ...activations import ACT2FN
-from ...file_utils import (
+from transformers.activations import ACT2FN
+from transformers.file_utils import (
     ModelOutput,
     add_code_sample_docstrings,
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
     replace_return_docstrings,
 )
-from ...modeling_outputs import (
+from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     CausalLMOutputWithCrossAttentions,
     SequenceClassifierOutputWithPast,
 )
-from ...modeling_utils import (
+from transformers.modeling_utils import (
     Conv1D,
     PreTrainedModel,
     SequenceSummary,
     find_pruneable_heads_and_indices,
     prune_conv1d_layer,
 )
-from ...utils import logging
-from ...utils.model_parallel_utils import assert_device_map, get_device_map
-from .configuration_gpt2 import GPT2Config
+from transformers.utils import logging
+from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
+from models.configuration_gpt2 import GPT2Config
 
 
 logger = logging.get_logger(__name__)
@@ -63,6 +63,33 @@ GPT2_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "distilgpt2",
     # See all GPT-2 models at https://huggingface.co/models?filter=gpt2
 ]
+
+
+class Adapter(nn.Module):
+    def __init__(self, config, adapter_size=None):
+        super(Adapter, self).__init__()
+        self.layer_norm = LayerNorm(config.hidden_size)
+
+        self.down_project = nn.Linear(config.hidden_size, config.adapter_size)
+        self.activation = nn.ReLU()
+        self.up_project = nn.Linear(config.adapter_size, config.hidden_size)
+        # self.init_weights(config)
+
+    def forward(self, hidden_states):
+        # [1, 1024] `* [1024, 256] -> 256
+        layer_norm = self.layer_norm(hidden_states)
+        down_projected = self.down_project(layer_norm)
+        activated = self.activation(down_projected)
+        up_projected = self.up_project(activated)
+        return hidden_states + up_projected
+
+    # def init_weights(self, config):
+    #     # Slightly different from the TF version which uses truncated_normal for initialization
+    #     # cf https://github.com/pytorch/pytorch/pull/5617
+    #     self.down_project.weight.data.normal_(mean=0.0, std=config.adapter_initializer_range)
+    #     self.down_project.bias.data.zero_()
+    #     self.up_project.weight.data.normal_(mean=0.0, std=config.adapter_initializer_range)
+    #     self.up_project.bias.data.zero_()
 
 
 def load_tf_weights_in_gpt2(model, config, gpt2_checkpoint_path):
@@ -156,6 +183,7 @@ class GPT2Attention(nn.Module):
 
         self.attn_dropout = nn.Dropout(config.attn_pdrop)
         self.resid_dropout = nn.Dropout(config.resid_pdrop)
+        # self.adapter = Adapter(config.adapter_size)
 
         self.pruned_heads = set()
 
@@ -294,13 +322,21 @@ class GPT2Block(nn.Module):
         self.ln_1 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         self.attn = GPT2Attention(config)
         self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
-
+        self.use_adapters = config.use_adapters
         if config.add_cross_attention:
             self.crossattention = GPT2Attention(config, is_cross_attention=True)
             self.ln_cross_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
         self.mlp = GPT2MLP(inner_dim, config)
+        adapter_dict = {}
+        if self.use_adapters:
+            for key, value in self.domain_dict:
+                adapter_dict[key] = Adapter(config)
+        self.adapter_dict = adapter_dict
 
+        # self.domain_dict = config.domain_dict
+        self.domain_dict = {4: 2, 5: 2, 6: 3, 7: 3, 2: 1, 3: 1, 1: 0}
+        # self.adapter = Adapter(config)
     def forward(
         self,
         hidden_states,
@@ -311,6 +347,7 @@ class GPT2Block(nn.Module):
         encoder_attention_mask=None,
         use_cache=False,
         output_attentions=False,
+        dataset_ind=None
     ):
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
@@ -352,6 +389,27 @@ class GPT2Block(nn.Module):
         residual = hidden_states
         hidden_states = self.ln_2(hidden_states)
         feed_forward_hidden_states = self.mlp(hidden_states)
+
+        # if self.use_adapters:
+        #     hidden_states = self.adapter(hidden_states)
+        hidden_states = 0
+        if self.use_adapters:
+            ind = dataset_ind
+            adapters_active = 0
+            #       1
+            #    2     3
+            #  4  5   6  7
+            # dict in the form {child:parent}
+            # self.domain_dict = {4:2, 5:2, 6:3, 7:3, 2:1, 3:1, 1:0}
+            while self.domain_dict[ind] != 0:  # while we haven't found the root of the tree
+                adapters_active += 1
+                hidden_states += self.adapter_dict[ind](feed_forward_hidden_states)
+                ind = self.domain_dict[ind]
+
+            # In the above tree, if initial ind==4, it goes like this: 4 - 2 - 1 - 0 (then exits while loop)
+            feed_forward_hidden_states = hidden_states / adapters_active
+            # we have the average of the active adapters
+
         # residual connection
         hidden_states = residual + feed_forward_hidden_states
 
@@ -657,6 +715,7 @@ class GPT2Model(GPT2PreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
+        dataset_ind=None,
     ):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -797,6 +856,7 @@ class GPT2Model(GPT2PreTrainedModel):
                     encoder_attention_mask=encoder_attention_mask,
                     use_cache=use_cache,
                     output_attentions=output_attentions,
+                    dataset_ind=dataset_ind
                 )
 
             hidden_states = outputs[0]
@@ -931,6 +991,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
+        dataset_ind=None
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
@@ -954,6 +1015,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            dataset_ind=dataset_ind
         )
         hidden_states = transformer_outputs[0]
 

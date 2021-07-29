@@ -43,9 +43,9 @@ from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils.versions import require_version
 
-from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel
-from transformers.models.gpt2.configuration_gpt2 import GPT2Config
-from transformers.trainer import Trainer
+from models.modeling_gpt2 import GPT2LMHeadModel
+from models.configuration_gpt2 import GPT2Config
+from trainer import Trainer
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
 
