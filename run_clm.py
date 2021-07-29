@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
+import json
 from datasets import load_dataset
 
 import transformers
@@ -141,6 +142,19 @@ class DataTrainingArguments:
         metadata={
             "help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
             "value if set."
+        },
+    )
+    use_adapters: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Are we using adapters"
+        },
+    )
+    num_domains: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "How many domains do we want to fine-tune the model on. Remember to also define a domain_dict.json "
+                    "with the domain hierarchy"
         },
     )
 
@@ -296,12 +310,26 @@ def main():
     # download model & vocab.
 
     config = GPT2Config.from_pretrained(model_args.model_name_or_path)
-    # TODO: use_adapters and adapter_size should be command-line arguments
-    config.use_adapters = False
+    config.use_adapters = data_args.use_adapters
+    config.num_domains = data_args.num_domains
+    if config.num_domains:
+        with open('domain_dict.json', 'r') as f:
+            config.domain_dict = {int(k): v for (k, v) in json.load(f).items()}
 
     tokenizer = GPT2Tokenizer.from_pretrained(model_args.model_name_or_path)
     model = GPT2LMHeadModel.from_pretrained(model_args.model_name_or_path, config=config,
                                             cache_dir=model_args.cache_dir)
+    if config.use_adapters:
+        for param in model.named_parameters():
+            if "adapter" not in param[0]:
+                param[1].requires_grad = False
+
+    # logger.info(model)
+    logger.info(
+        "Number of parameters = {}, "
+        "out of which {} trainable".format(sum([p.numel() for p in model.parameters()]),
+                                               sum([p.numel() for p in model.parameters() if
+                                                    p.requires_grad])))
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
@@ -382,33 +410,34 @@ def main():
             load_from_cache_file=not data_args.overwrite_cache,
             desc=f"Grouping texts in chunks of {block_size}",
         )
-
+    train_datasets = []
+    eval_datasets = []
     if training_args.do_train:
         if "train" not in tokenized_datasets:
             raise ValueError("--do_train requires a train dataset")
-        train_dataset = lm_datasets["train"]
-        train_dataset_2 = lm_datasets["train"]
+        for dataset in range(config.num_domains):
+            train_datasets.append(lm_datasets["train"])
 
         if data_args.max_train_samples is not None:
-            train_dataset = train_dataset.select(range(data_args.max_train_samples))
-            train_dataset_2 = train_dataset_2.select(range(data_args.max_train_samples))
-        train_datasets = [train_dataset, train_dataset_2]
+            for i in range(len(train_datasets)):
+                train_datasets[i] = train_datasets[i].select(range(data_args.max_train_samples))
+
     if training_args.do_eval:
         if "validation" not in tokenized_datasets:
             raise ValueError("--do_eval requires a validation dataset")
-        eval_dataset = lm_datasets["validation"]
-        eval_dataset_2 = lm_datasets["validation"]
+        for dataset in range(config.num_domains):
+            eval_datasets.append(lm_datasets["validation"])
 
         if data_args.max_eval_samples is not None:
-            eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
-            eval_dataset_2 = eval_dataset_2.select(range(data_args.max_eval_samples))
-        eval_datasets = [eval_dataset, eval_dataset_2]
+            for i in range(len(eval_datasets)):
+                eval_datasets[i] = eval_datasets[i].select(range(data_args.max_train_samples))
+
     # Initialize our Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=[train_dataset, train_dataset_2] if training_args.do_train else None,
-        eval_dataset=[eval_dataset, eval_dataset_2] if training_args.do_eval else None,
+        train_dataset=train_datasets if training_args.do_train else None,
+        eval_dataset=eval_datasets if training_args.do_eval else None,
         tokenizer=tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
         data_collator=default_data_collator,
@@ -442,6 +471,8 @@ def main():
         logger.info("*** Evaluate ***")
 
         metrics = trainer.evaluate()
+        # eval_loss here is the average of the eval_loss in X domains
+
         len_eval_dataset = 0
         for dataset in eval_datasets:
             len_eval_dataset += len(dataset)

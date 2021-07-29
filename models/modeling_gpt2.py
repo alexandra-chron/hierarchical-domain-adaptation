@@ -183,7 +183,6 @@ class GPT2Attention(nn.Module):
 
         self.attn_dropout = nn.Dropout(config.attn_pdrop)
         self.resid_dropout = nn.Dropout(config.resid_pdrop)
-        # self.adapter = Adapter(config.adapter_size)
 
         self.pruned_heads = set()
 
@@ -328,15 +327,16 @@ class GPT2Block(nn.Module):
             self.ln_cross_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
         self.mlp = GPT2MLP(inner_dim, config)
-        adapter_dict = {}
-        if self.use_adapters:
-            for key, value in self.domain_dict:
-                adapter_dict[key] = Adapter(config)
-        self.adapter_dict = adapter_dict
 
-        # self.domain_dict = config.domain_dict
-        self.domain_dict = {4: 2, 5: 2, 6: 3, 7: 3, 2: 1, 3: 1, 1: 0}
-        # self.adapter = Adapter(config)
+        self.domain_dict = config.domain_dict
+        adapter_list = []
+        if self.use_adapters:
+            for _ in self.domain_dict.keys():
+                adapter_list.append(Adapter(config))
+            self.adapter_module = nn.ModuleList(adapter_list)
+
+            logger.info(f"I was given a tree with {len(self.domain_dict.keys())} nodes and I initialized {len(adapter_list)} adapters!")
+
     def forward(
         self,
         hidden_states,
@@ -390,24 +390,22 @@ class GPT2Block(nn.Module):
         hidden_states = self.ln_2(hidden_states)
         feed_forward_hidden_states = self.mlp(hidden_states)
 
-        # if self.use_adapters:
-        #     hidden_states = self.adapter(hidden_states)
-        hidden_states = 0
+        adapter_outputs = 0
         if self.use_adapters:
             ind = dataset_ind
             adapters_active = 0
-            #       1
-            #    2     3
-            #  4  5   6  7
+            #       7
+            #    5     6
+            #  1  2   3  4
             # dict in the form {child:parent}
-            # self.domain_dict = {4:2, 5:2, 6:3, 7:3, 2:1, 3:1, 1:0}
-            while self.domain_dict[ind] != 0:  # while we haven't found the root of the tree
+
+            while ind != 0:  # while we haven't found the root of the tree
                 adapters_active += 1
-                hidden_states += self.adapter_dict[ind](feed_forward_hidden_states)
+                adapter_outputs += self.adapter_module[ind-1](feed_forward_hidden_states)
                 ind = self.domain_dict[ind]
 
-            # In the above tree, if initial ind==4, it goes like this: 4 - 2 - 1 - 0 (then exits while loop)
-            feed_forward_hidden_states = hidden_states / adapters_active
+            # In the above tree, if initial ind==1, it goes like this: 1 - 5 - 7 - 0 (then exits while loop)
+            feed_forward_hidden_states = adapter_outputs / adapters_active
             # we have the average of the active adapters
 
         # residual connection
