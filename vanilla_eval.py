@@ -16,8 +16,8 @@ from transformers import (
     DataCollatorForLanguageModeling,
 )
 from tqdm import tqdm
-from models.modeling_gpt2 import GPT2LMHeadModel
-from models.configuration_gpt2 import GPT2Config
+from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel
+from transformers.models.gpt2.configuration_gpt2 import GPT2Config
 from tools.mmap_dataset import get_mmap_dataset
 from tools.openwebtext_dataset import get_openwebtext_dataset
 from tools.wikitext_dataset import get_wikitext_dataset
@@ -145,7 +145,7 @@ def main(
     total_batches = len(dataloader)
     with tqdm(dataloader, desc="Evaluating", total=total_batches) as batch_iterator:
         for i, batch in enumerate(batch_iterator):
-            batch = {k: v.cuda() for k, v in batch.items()}
+            batch = {k: v for k, v in batch.items()}
             with torch.inference_mode():
                 outputs = model(**batch)
 
