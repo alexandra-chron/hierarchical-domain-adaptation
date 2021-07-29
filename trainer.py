@@ -76,7 +76,7 @@ from transformers.modelcard import TrainingSummary
 from transformers.modeling_utils import PreTrainedModel, unwrap_model
 from transformers.optimization import Adafactor, AdamW, get_scheduler
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_callback import (
+from trainer_callback import (
     CallbackHandler,
     DefaultFlowCallback,
     PrinterCallback,
@@ -1294,6 +1294,14 @@ class Trainer:
             )
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
 
+            # multi_batch: the concatenation of batches from each of all X domains
+            # compared to single-task training, I have an extra for loop here that iterates over the domains
+
+            # I am passing an ind which shows where my data comes from, i.e. from which domain
+            # According to this ind, different adapters will be activated in the forward pass
+
+            # currently gradient accumulation = len(domains)
+
             for step, multi_batch in enumerate(epoch_iterator):
                 sum_losses = torch.tensor(0.0).to(args.device)
 
@@ -1320,13 +1328,16 @@ class Trainer:
                     ):
                         # Avoid unnecessary DDP synchronization since there will be no backward pass on this example.
                         with model.no_sync():
-                            loss = self.training_step(model, inputs, dataset_ind=ind)
+                            loss = self.training_step(model, inputs, dataset_ind=ind+1)
                     else:
-                        loss = self.training_step(model, inputs, dataset_ind=ind)
+                        loss = self.training_step(model, inputs, dataset_ind=ind+1)
+                        # To backpropogate the error all we have to do is to run loss.backward()
+                        # After each loss.backward, already computed gradients are accumulated to existing gradients
+                        loss.backward()
                     self.current_flos += float(self.floating_point_ops(inputs))
                     sum_losses += loss
 
-                sum_losses.backward()
+                # sum_losses
                 tr_loss += sum_losses.item()
                 # Optimizer step for deepspeed must be called on every step regardless of the value of gradient_accumulation_steps
                 if self.deepspeed:
@@ -2080,18 +2091,17 @@ class Trainer:
         start_time = time.time()
 
         eval_loop = self.prediction_loop if self.args.use_legacy_prediction_loop else self.evaluation_loop
-        for i, eval_dataloader in enumerate(tqdm(eval_dataloaders, desc="Evaluating")):
 
-            output = eval_loop(
-                eval_dataloader,
-                description="Evaluation",
-                # No point gathering the predictions if there are no metrics, otherwise we defer to
-                # self.args.prediction_loss_only
-                prediction_loss_only=True if self.compute_metrics is None else None,
-                ignore_keys=ignore_keys,
-                metric_key_prefix=metric_key_prefix,
-                dataset_ind=i
-            )
+        # I am passing the concatenation of dataloaders as argument to the eval_loop script
+        output = eval_loop(
+            dataloaders=eval_dataloaders,
+            description="Evaluation",
+            # No point gathering the predictions if there are no metrics, otherwise we defer to
+            # self.args.prediction_loss_only
+            prediction_loss_only=True if self.compute_metrics is None else None,
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix
+        )
 
         total_batch_size = self.args.eval_batch_size * self.args.world_size
         output.metrics.update(
@@ -2174,13 +2184,11 @@ class Trainer:
 
     def evaluation_loop(
         self,
-        dataloader: DataLoader,
+        dataloaders: List[DataLoader],
         description: str,
         prediction_loss_only: Optional[bool] = None,
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
-        ind: Optional[int] = None,
-        dataset_ind=None
     ) -> EvalLoopOutput:
         """
         Prediction/evaluation loop, shared by :obj:`Trainer.evaluate()` and :obj:`Trainer.predict()`.
@@ -2213,23 +2221,30 @@ class Trainer:
         if not self.is_in_train and self.args.fp16_full_eval:
             model = model.half().to(self.args.device)
 
-        batch_size = dataloader.batch_size
+        # hard-coded for now
+        batch_size = dataloaders[0].batch_size
 
         logger.info(f"***** Running {description} *****")
-        if isinstance(dataloader.dataset, collections.abc.Sized):
-            logger.info(f"  Num examples = {self.num_examples(dataloader)}")
+        if isinstance(dataloaders[0].dataset, collections.abc.Sized):
+            num_examples = []
+            for dataloader in dataloaders:
+                num_examples.append(self.num_examples(dataloader))
+            for i, num_examples_per_domain in enumerate(num_examples):
+                logger.info(f"  Num examples for domain {i+1} = {num_examples_per_domain}")
         else:
             logger.info("  Num examples: Unknown")
         logger.info(f"  Batch size = {batch_size}")
 
         model.eval()
 
-        self.callback_handler.eval_dataloader = dataloader
+        self.callback_handler.eval_dataloader = dataloaders
         # Do this before wrapping.
-        eval_dataset = dataloader.dataset
+        eval_datasets = []
+        for dataloader in dataloaders:
+            eval_datasets.append(dataloader.dataset)
 
-        if is_torch_tpu_available():
-            dataloader = pl.ParallelLoader(dataloader, [self.args.device]).per_device_loader(self.args.device)
+        # if is_torch_tpu_available():
+        #     dataloader = pl.ParallelLoader(dataloader, [self.args.device]).per_device_loader(self.args.device)
 
         if self.args.past_index >= 0:
             self._past = None
@@ -2247,98 +2262,123 @@ class Trainer:
 
         observed_num_examples = 0
         # Main evaluation loop
-        for step, inputs in enumerate(dataloader):
-            # Update the observed num examples
-            observed_batch_size = find_batch_size(inputs)
-            if observed_batch_size is not None:
-                observed_num_examples += observed_batch_size
+        all_pred_list, all_labels_list, metrics_list, num_samples_list = [], [], [], []
 
-            # Prediction step
-            loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
-                                                        dataset_ind=dataset_ind)
+        # Compared to single-task evaluation, again here we are adding an extra loop that iterates over the dataloader
+        # of each of the domains
+        # ind is passed to indicate domain and activate a subset of the adapters (the same as in training for now)
+        # when I have calculated the loss in each domain (saved in metrics_list), I compute the average
+        # and this is what I feed to the EvalLoopOutput (return argument)
 
-            # Update containers on host
-            if loss is not None:
-                losses = self._nested_gather(loss.repeat(batch_size))
-                losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
-            if logits is not None:
-                logits = self._pad_across_processes(logits)
-                logits = self._nested_gather(logits)
-                preds_host = logits if preds_host is None else nested_concat(preds_host, logits, padding_index=-100)
-            if labels is not None:
-                labels = self._pad_across_processes(labels)
-                labels = self._nested_gather(labels)
-                labels_host = labels if labels_host is None else nested_concat(labels_host, labels, padding_index=-100)
-            self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
+        for ind, dataloader in enumerate(dataloaders):
+            for step, inputs in enumerate(dataloader):
+                # Update the observed num examples
+                observed_batch_size = find_batch_size(inputs)
+                if observed_batch_size is not None:
+                    observed_num_examples += observed_batch_size
 
-            # Gather all tensors and put them back on the CPU if we have done enough accumulation steps.
-            if self.args.eval_accumulation_steps is not None and (step + 1) % self.args.eval_accumulation_steps == 0:
-                if losses_host is not None:
-                    losses = nested_numpify(losses_host)
-                    all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
-                if preds_host is not None:
-                    logits = nested_numpify(preds_host)
-                    all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
-                if labels_host is not None:
-                    labels = nested_numpify(labels_host)
-                    all_labels = (
-                        labels if all_labels is None else nested_concat(all_labels, labels, padding_index=-100)
-                    )
+                # Prediction step
+                loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
+                                                            dataset_ind=ind+1)
 
-                # Set back to None to begin a new accumulation
-                losses_host, preds_host, labels_host = None, None, None
+                # Update containers on host
+                if loss is not None:
+                    losses = self._nested_gather(loss.repeat(batch_size))
+                    losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
+                if logits is not None:
+                    logits = self._pad_across_processes(logits)
+                    logits = self._nested_gather(logits)
+                    preds_host = logits if preds_host is None else nested_concat(preds_host, logits, padding_index=-100)
+                if labels is not None:
+                    labels = self._pad_across_processes(labels)
+                    labels = self._nested_gather(labels)
+                    labels_host = labels if labels_host is None else nested_concat(labels_host, labels, padding_index=-100)
+                self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
 
-        if self.args.past_index and hasattr(self, "_past"):
-            # Clean the state at the end of the evaluation loop
-            delattr(self, "_past")
+                # Gather all tensors and put them back on the CPU if we have done enough accumulation steps.
+                if self.args.eval_accumulation_steps is not None and (step + 1) % self.args.eval_accumulation_steps == 0:
+                    if losses_host is not None:
+                        losses = nested_numpify(losses_host)
+                        all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
+                    if preds_host is not None:
+                        logits = nested_numpify(preds_host)
+                        all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
+                    if labels_host is not None:
+                        labels = nested_numpify(labels_host)
+                        all_labels = (
+                            labels if all_labels is None else nested_concat(all_labels, labels, padding_index=-100)
+                        )
 
-        # Gather all remaining tensors and put them back on the CPU
-        if losses_host is not None:
-            losses = nested_numpify(losses_host)
-            all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
-        if preds_host is not None:
-            logits = nested_numpify(preds_host)
-            all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
-        if labels_host is not None:
-            labels = nested_numpify(labels_host)
-            all_labels = labels if all_labels is None else nested_concat(all_labels, labels, padding_index=-100)
+                    # Set back to None to begin a new accumulation
+                    losses_host, preds_host, labels_host = None, None, None
 
-        # Number of samples
-        if not isinstance(eval_dataset, IterableDataset):
-            num_samples = len(eval_dataset)
-        # The instance check is weird and does not actually check for the type, but whether the dataset has the right
-        # methods. Therefore we need to make sure it also has the attribute.
-        elif isinstance(eval_dataset, IterableDatasetShard) and hasattr(eval_dataset, "num_examples"):
-            num_samples = eval_dataset.num_examples
-        else:
-            num_samples = observed_num_examples
+            if self.args.past_index and hasattr(self, "_past"):
+                # Clean the state at the end of the evaluation loop
+                delattr(self, "_past")
 
-        # Number of losses has been rounded to a multiple of batch_size and in a distributed training, the number of
-        # samplers has been rounded to a multiple of batch_size, so we truncate.
-        if all_losses is not None:
-            all_losses = all_losses[:num_samples]
-        if all_preds is not None:
-            all_preds = nested_truncate(all_preds, num_samples)
-        if all_labels is not None:
-            all_labels = nested_truncate(all_labels, num_samples)
+            # Gather all remaining tensors and put them back on the CPU
+            if losses_host is not None:
+                losses = nested_numpify(losses_host)
+                all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
+            if preds_host is not None:
+                logits = nested_numpify(preds_host)
+                all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
+            if labels_host is not None:
+                labels = nested_numpify(labels_host)
+                all_labels = labels if all_labels is None else nested_concat(all_labels, labels, padding_index=-100)
 
-        # Metrics!
-        if self.compute_metrics is not None and all_preds is not None and all_labels is not None:
-            metrics = self.compute_metrics(EvalPrediction(predictions=all_preds, label_ids=all_labels))
-        else:
-            metrics = {}
+            # Number of samples
+            if not isinstance(eval_datasets[ind], IterableDataset):
+                num_samples = len(eval_datasets[ind])
+            # The instance check is weird and does not actually check for the type, but whether the dataset has the right
+            # methods. Therefore we need to make sure it also has the attribute.
+            elif isinstance(eval_datasets[ind], IterableDatasetShard) and hasattr(eval_datasets[ind], "num_examples"):
+                num_samples = eval_datasets[ind].num_examples
+            else:
+                num_samples = observed_num_examples
 
-        # To be JSON-serializable, we need to remove numpy types or zero-d tensors
-        metrics = denumpify_detensorize(metrics)
+            # Number of losses has been rounded to a multiple of batch_size and in a distributed training, the number of
+            # samplers has been rounded to a multiple of batch_size, so we truncate.
+            if all_losses is not None:
+                all_losses = all_losses[:num_samples]
+            if all_preds is not None:
+                all_preds = nested_truncate(all_preds, num_samples)
+            if all_labels is not None:
+                all_labels = nested_truncate(all_labels, num_samples)
 
-        if all_losses is not None:
-            metrics[f"{metric_key_prefix}_loss"] = all_losses.mean().item()
+            # Metrics!
+            if self.compute_metrics is not None and all_preds is not None and all_labels is not None:
+                metrics = self.compute_metrics(EvalPrediction(predictions=all_preds, label_ids=all_labels))
+            else:
+                metrics = {}
 
-        # Prefix all keys with metric_key_prefix + '_'
-        for key in list(metrics.keys()):
-            if not key.startswith(f"{metric_key_prefix}_"):
-                metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
+            # To be JSON-serializable, we need to remove numpy types or zero-d tensors
+            metrics = denumpify_detensorize(metrics)
 
+            if all_losses is not None:
+                metrics[f"{metric_key_prefix}_loss"] = all_losses.mean().item()
+
+            # Prefix all keys with metric_key_prefix + '_'
+            for key in list(metrics.keys()):
+                if not key.startswith(f"{metric_key_prefix}_"):
+                    metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
+
+            all_pred_list.append(all_preds)
+            all_labels_list.append(all_labels)
+            metrics_list.append(metrics)
+            num_samples_list.append(num_samples)
+        if not all_pred_list[0]:
+            all_preds = None
+        if not all_labels_list[0]:
+            all_labels = None
+        sum_metrics = 0
+        sum_samples = 0
+        for loss_dict in metrics_list:
+            sum_metrics += loss_dict[f"{metric_key_prefix}_loss"]
+        for sample in num_samples_list:
+            sum_samples += sample
+        num_samples = sum_samples
+        metrics[f"{metric_key_prefix}_loss"] = sum_metrics / len(metrics_list)
         return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples)
 
     def _nested_gather(self, tensors, name=None):
