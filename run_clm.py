@@ -125,7 +125,8 @@ class DataTrainingArguments:
     dataset_config_name: Optional[str] = field(
         default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
     )
-    train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a text file)."})
+    train_file: Optional[str] = field(default='./corpora/film.train.json', metadata={"help":
+                                                                "The input training data file (a text file)."})
     validation_file: Optional[str] = field(
         default=None,
         metadata={"help": "An optional input evaluation data file to evaluate the perplexity on (a text file)."},
@@ -154,7 +155,7 @@ class DataTrainingArguments:
         default=None,
         metadata={
             "help": "How many domains do we want to fine-tune the model on. Remember to also define a domain_dict.json "
-                    "with the domain hierarchy"
+                    "with the domain hierarchy and the domain_names.json"
         },
     )
 
@@ -243,6 +244,17 @@ def main():
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
+    config = GPT2Config.from_pretrained(model_args.model_name_or_path)
+    config.use_adapters = data_args.use_adapters
+    config.num_domains = data_args.num_domains
+    if config.num_domains:
+        with open('domain_dict.json', 'r') as f:
+            config.domain_dict = {int(k): v for (k, v) in json.load(f).items()}
+        with open('domain_names.json', 'r') as f:
+            config.domains = []
+            for (k, v) in json.load(f).items():
+                config.domains.append(v)
+    path = "/".join(data_args.train_file.split("/")[:2]) + "/"
 
     # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
     # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
@@ -253,6 +265,7 @@ def main():
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
+
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         raw_datasets = load_dataset(
@@ -272,34 +285,22 @@ def main():
                 cache_dir=model_args.cache_dir,
             )
     else:
+        domains = config.domains
         data_files = {}
-        if data_args.train_file is not None:
-            data_files["train"] = data_args.train_file
-        if data_args.validation_file is not None:
-            data_files["validation"] = data_args.validation_file
-        extension = (
-            data_args.train_file.split(".")[-1]
-            if data_args.train_file is not None
-            else data_args.validation_file.split(".")[-1]
-        )
-        if extension == "txt":
-            extension = "text"
-        raw_datasets = load_dataset(extension, data_files=data_files, cache_dir=model_args.cache_dir)
-        # If no validation data is there, validation_split_percentage will be used to divide the dataset.
-        if "validation" not in raw_datasets.keys():
-            raw_datasets["validation"] = load_dataset(
-                extension,
-                data_files=data_files,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-            )
-            raw_datasets["train"] = load_dataset(
-                extension,
-                data_files=data_files,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-            )
+        for domain in domains:
+            data_files[domain] = {}
+            for split in ["train", "valid"]:
+                if split == "valid": temp_split = "val"
+                else: temp_split = "train"
+                data_files[domain][split] = path + domain + "." + temp_split + ".json"
 
+        raw_datasets = {}
+        for domain in domains:
+            raw_datasets[domain] = {}
+        for domain in domains:
+            for split in ["train", "valid"]:
+                raw_datasets[domain][split] = load_dataset("text", data_files={split: data_files[domain][split]},
+                                                           split=split, cache_dir=model_args.cache_dir)
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -308,13 +309,6 @@ def main():
     # Distributed training:
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
-
-    config = GPT2Config.from_pretrained(model_args.model_name_or_path)
-    config.use_adapters = data_args.use_adapters
-    config.num_domains = data_args.num_domains
-    if config.num_domains:
-        with open('domain_dict.json', 'r') as f:
-            config.domain_dict = {int(k): v for (k, v) in json.load(f).items()}
 
     tokenizer = GPT2Tokenizer.from_pretrained(model_args.model_name_or_path)
     model = GPT2LMHeadModel.from_pretrained(model_args.model_name_or_path, config=config,
@@ -334,9 +328,9 @@ def main():
     # Preprocessing the datasets.
     # First we tokenize all the texts.
     if training_args.do_train:
-        column_names = raw_datasets["train"].column_names
+        column_names = raw_datasets[domains[0]]["train"].column_names
     else:
-        column_names = raw_datasets["validation"].column_names
+        column_names = raw_datasets[domains[0]]["valid"].column_names
     text_column_name = "text" if "text" in column_names else column_names[0]
 
     # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
@@ -353,14 +347,18 @@ def main():
         return output
 
     with training_args.main_process_first(desc="dataset map tokenization"):
-        tokenized_datasets = raw_datasets.map(
-            tokenize_function,
-            batched=True,
-            num_proc=data_args.preprocessing_num_workers,
-            remove_columns=column_names,
-            load_from_cache_file=not data_args.overwrite_cache,
-            desc="Running tokenizer on dataset",
-        )
+        tokenized_datasets = {}
+        for domain in domains:
+            tokenized_datasets[domain] = {}
+            for split in ["train", "valid"]:
+                tokenized_datasets[domain][split] = raw_datasets[domain][split].map(
+                    tokenize_function,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    remove_columns=column_names,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc="Running tokenizer on dataset",
+                )
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -401,32 +399,35 @@ def main():
     #
     # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
     # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
-
-    with training_args.main_process_first(desc="grouping texts together"):
-        lm_datasets = tokenized_datasets.map(
-            group_texts,
-            batched=True,
-            num_proc=data_args.preprocessing_num_workers,
-            load_from_cache_file=not data_args.overwrite_cache,
-            desc=f"Grouping texts in chunks of {block_size}",
-        )
+    lm_datasets = {}
+    for domain in domains:
+        lm_datasets[domain] = {}
+        for split in ["train", "valid"]:
+            with training_args.main_process_first(desc="grouping texts together"):
+                lm_datasets[domain][split] = tokenized_datasets[domain][split].map(
+                    group_texts,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc=f"Grouping texts in chunks of {block_size}",
+                )
     train_datasets = []
     eval_datasets = []
     if training_args.do_train:
-        if "train" not in tokenized_datasets:
-            raise ValueError("--do_train requires a train dataset")
-        for dataset in range(config.num_domains):
-            train_datasets.append(lm_datasets["train"])
+        for domain in domains:
+            if "train" not in tokenized_datasets[domain]:
+                raise ValueError("--do_train requires a train dataset")
+            train_datasets.append(lm_datasets[domain]["train"])
 
         if data_args.max_train_samples is not None:
             for i in range(len(train_datasets)):
                 train_datasets[i] = train_datasets[i].select(range(data_args.max_train_samples))
 
     if training_args.do_eval:
-        if "validation" not in tokenized_datasets:
-            raise ValueError("--do_eval requires a validation dataset")
-        for dataset in range(config.num_domains):
-            eval_datasets.append(lm_datasets["validation"])
+        for domain in domains:
+            if "valid" not in tokenized_datasets[domain]:
+                raise ValueError("--do_eval requires a validation dataset")
+            eval_datasets.append(lm_datasets[domain]["valid"])
 
         if data_args.max_eval_samples is not None:
             for i in range(len(eval_datasets)):
@@ -470,7 +471,7 @@ def main():
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
 
-        metrics = trainer.evaluate()
+        metrics, domain_losses = trainer.evaluate()
         # eval_loss here is the average of the eval_loss in X domains
 
         len_eval_dataset = 0
@@ -483,7 +484,8 @@ def main():
         except OverflowError:
             perplexity = float("inf")
         metrics["perplexity"] = perplexity
-
+        for i, loss in enumerate(domain_losses):
+            metrics[f'eval_loss_domain_{i}'] = loss
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
