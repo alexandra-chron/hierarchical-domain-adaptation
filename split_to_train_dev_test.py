@@ -1,20 +1,7 @@
-import gzip
 import json
-import os
-from tqdm import tqdm
-from glob import glob
-from collections import defaultdict
+
 import argparse
 from numpy.random import choice
-
-''' Example 1 - get sorted dict of domains (per number of docs) and the subdomains for all domains:
-      python preprocess_c4.py --dump_path ./ --get_number_of_docs_per_domain True --get_subdomains_for_all_domains True
-
-    Example 2 - get sorted list of domains and the subdomains only for specific domains:
-      python preprocess_c4.py --dump_path ./ --get_number_of_docs_per_domain True 
-      --get_subdomains_for_specific_domains "journals.plos.org" "www.mdpi.com" "www.frontiersin.org" "www.springer.com"
-    '''
-
 
 def get_parser():
     """
@@ -24,7 +11,7 @@ def get_parser():
     parser = argparse.ArgumentParser()
 
     # main parameters
-    parser.add_argument("--data_dir", type=str, default="./domains_and_subdomains.json",
+    parser.add_argument("--data_dir", type=str, default="./domains_and_subdomains_guardian.json",
                         help="Path where data is stored")
     parser.add_argument("--dump_path", type=str, default="./", help="Experiment dump path")
     return parser
@@ -39,22 +26,24 @@ def main(params):
     num_tokens_per_doc = {}
 
     for domain, docs_list in files.items():
-        files_new[domain] = []
-        num_tokens_per_doc[domain] = []
-        count = 0
-        ignored_docs = 0
-        for i, doc in enumerate(docs_list):
-            num_tokens = len(doc.split(' '))
-            if num_tokens > 200:
-                count += num_tokens
-                files_new[domain].append(doc)
-                num_tokens_per_doc[domain].append(num_tokens)
-            else:
-                ignored_docs += 1
+        if domain in ["music", "film", "business", "money"]:
 
-        print("The domain {} has {} tokens.".format(domain, count))
+            files_new[domain] = []
+            num_tokens_per_doc[domain] = []
+            count = 0
+            ignored_docs = 0
+            for i, doc in enumerate(docs_list):
+                num_tokens = len(doc.split(' '))
+                if num_tokens > 200:
+                    count += num_tokens
+                    files_new[domain].append(doc)
+                    num_tokens_per_doc[domain].append(num_tokens)
+                else:
+                    ignored_docs += 1
 
-    train_dev_test_dict = {}
+            print("The domain {} has {} tokens.".format(domain, count))
+            print("{} documents were too short and thus ignored for domain {}.".format(ignored_docs, domain))
+
     for domain, doc_list in files_new.items():
         train_set_domain1, val_set_domain1, test_set_domain1 = [], [], []
 
