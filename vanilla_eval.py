@@ -18,6 +18,8 @@ from transformers import (
 from tqdm import tqdm
 from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel
 from transformers.models.gpt2.configuration_gpt2 import GPT2Config
+
+from tools.domain_dataset import get_domain_dataset
 from tools.mmap_dataset import get_mmap_dataset
 from tools.openwebtext_dataset import get_openwebtext_dataset
 from tools.wikitext_dataset import get_wikitext_dataset
@@ -37,7 +39,7 @@ MODEL_CLASSES = {
 @click.option(
     "--dataset",
     default="wikitext2",
-    type=click.Choice(["wikitext2", "openwebtext", "mmap"]),
+    type=click.Choice(["wikitext2", "openwebtext", "mmap", "business", "money", "film", "music"]),
     show_choices=True,
     show_default=True,
     help="The dataset to evaluate on.",
@@ -57,7 +59,7 @@ MODEL_CLASSES = {
 )
 @click.option(
     "--batch-size",
-    default=32,
+    default=128,
     show_default=True,
     help="The batch size to use for evaluation.",
 )
@@ -69,7 +71,7 @@ MODEL_CLASSES = {
 )
 @click.option(
     "--use-adapters",
-    default=True,
+    default=False,
     show_default=True,
     help="""Should we use adapters""",
 )
@@ -119,6 +121,15 @@ def main(
             split="test",
             block_size=block_size,
             num_workers=1,
+        )
+    elif dataset in ['film', 'music', 'business', 'money']:
+        dataset_object = get_domain_dataset(
+            tokenizer,
+            split="valid",
+            block_size=block_size,
+            num_workers=8,
+            domain=f'{dataset}.val.json',
+            path='/home/alexandrac/projects/hierarchical-domain-adaptation/corpora/'
         )
     elif dataset == "openwebtext":
         dataset_object = get_openwebtext_dataset(
