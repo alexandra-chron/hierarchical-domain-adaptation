@@ -158,7 +158,19 @@ class DataTrainingArguments:
                     "with the domain hierarchy and the domain_names.json"
         },
     )
-
+    adapter_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Size of each adapter layer"
+        },
+    )
+    use_tree_structure: Optional[bool] = field(
+        default=True,
+        metadata={
+            "help": "Use tree structure for adapters. If it is false, use simple multi-task/single-task learning "
+                    "based on the num_domains"
+        },
+    )
     block_size: Optional[int] = field(
         default=None,
         metadata={
@@ -247,6 +259,9 @@ def main():
     config = GPT2Config.from_pretrained(model_args.model_name_or_path)
     config.use_adapters = data_args.use_adapters
     config.num_domains = data_args.num_domains
+    config.adapter_size = data_args.adapter_size
+    config.use_tree_structure = data_args.use_tree_structure
+
     if config.num_domains:
         with open('domain_dict.json', 'r') as f:
             config.domain_dict = {int(k): v for (k, v) in json.load(f).items()}
@@ -254,6 +269,9 @@ def main():
             config.domains = []
             for (k, v) in json.load(f).items():
                 config.domains.append(v)
+        assert config.num_domains == len(config.domains), "Make sure you have provided a domain_names.json that" \
+                                                          " lists ALL domains (number" \
+                                                          " of domains specified with the num_domains flag)!"
     path = "/".join(data_args.train_file.split("/")[:2]) + "/"
 
     # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)

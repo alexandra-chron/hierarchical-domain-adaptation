@@ -329,10 +329,18 @@ class GPT2Block(nn.Module):
         self.mlp = GPT2MLP(inner_dim, config)
 
         self.domain_dict = config.domain_dict
+        self.num_domains = config.num_domains
+        self.use_tree_structure = config.use_tree_structure
         adapter_list = []
+
         if self.use_adapters:
-            for _ in self.domain_dict.keys():
-                adapter_list.append(Adapter(config))
+            if self.use_tree_structure:
+                for _ in self.domain_dict.keys():
+                    adapter_list.append(Adapter(config))
+            else:
+                for _ in range(self.num_domains):
+                    adapter_list.append(Adapter(config))
+
             self.adapter_module = nn.ModuleList(adapter_list)
 
             logger.info(f"I was given a tree with {len(self.domain_dict.keys())} nodes and I initialized {len(adapter_list)} adapters!")
@@ -392,21 +400,27 @@ class GPT2Block(nn.Module):
 
         adapter_outputs = 0
         if self.use_adapters:
-            ind = dataset_ind
-            adapters_active = 0
-            #       7
-            #    5     6
-            #  1  2   3  4
-            # dict in the form {child:parent}
+            if self.use_tree_structure:
+                ind = dataset_ind
+                adapters_active = 0
+                #       7
+                #    5     6
+                #  1  2   3  4
+                # dict in the form {child:parent}
 
-            while ind != 0:  # while we haven't found the root of the tree
-                adapters_active += 1
-                adapter_outputs += self.adapter_module[ind-1](feed_forward_hidden_states)
-                ind = self.domain_dict[ind]
-
-            # In the above tree, if initial ind==1, it goes like this: 1 - 5 - 7 - 0 (then exits while loop)
-            feed_forward_hidden_states = adapter_outputs / adapters_active
-            # we have the average of the active adapters
+                while ind != 0:  # while we haven't found the root of the tree
+                    adapters_active += 1
+                    adapter_outputs += self.adapter_module[ind-1](feed_forward_hidden_states)
+                    ind = self.domain_dict[ind]
+                    print(ind)
+                # In the above tree, if initial ind==1, it goes like this: 1 - 5 - 7 - 0 (then exits while loop)
+                feed_forward_hidden_states = adapter_outputs / adapters_active
+                # we have the average of the active adapters
+            else:
+                # multi-task learning, the hidden_states of all adapters (1 for each domain) are averaged
+                for i in range(self.num_domains):
+                    adapter_outputs += self.adapter_module[i](feed_forward_hidden_states)
+                feed_forward_hidden_states = adapter_outputs / self.num_domains
 
         # residual connection
         hidden_states = residual + feed_forward_hidden_states
