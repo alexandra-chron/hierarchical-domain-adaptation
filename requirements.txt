@@ -19,7 +19,7 @@ torch==1.9.0
 tokenizers==0.10.3
 sentencepiece==0.1.96
 datasets==1.9.0
-transformers==4.8.2
+transformers==4.9.1
 click==7.1.2
 black==21.7b0
 mypy==0.910
