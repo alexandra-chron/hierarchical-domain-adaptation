@@ -411,8 +411,8 @@ class GPT2Block(nn.Module):
                 while ind != 0:  # while we haven't found the root of the tree
                     adapters_active += 1
                     adapter_outputs += self.adapter_module[ind-1](feed_forward_hidden_states)
+                    # print("\n" + str(ind))
                     ind = self.domain_dict[ind]
-                    print(ind)
                 # In the above tree, if initial ind==1, it goes like this: 1 - 5 - 7 - 0 (then exits while loop)
                 feed_forward_hidden_states = adapter_outputs / adapters_active
                 # we have the average of the active adapters
