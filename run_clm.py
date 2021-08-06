@@ -489,7 +489,7 @@ def main():
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
 
-        metrics, domain_losses = trainer.evaluate()
+        metrics = trainer.evaluate()
         # eval_loss here is the average of the eval_loss in X domains
 
         len_eval_dataset = 0
@@ -502,8 +502,6 @@ def main():
         except OverflowError:
             perplexity = float("inf")
         metrics["perplexity"] = perplexity
-        for i, loss in enumerate(domain_losses):
-            metrics[f'eval_loss_domain_{i}'] = loss
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 

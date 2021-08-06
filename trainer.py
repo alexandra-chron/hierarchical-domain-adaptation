@@ -1255,9 +1255,15 @@ class Trainer:
 
         # tr_loss is a tensor to avoid synchronization of TPUs through .item()
         tr_loss = torch.tensor(0.0).to(args.device)
+        losses_per_domain_aggr = {}
+        for i in range(len(train_dataloaders)):
+            losses_per_domain_aggr[f"domain_{i}"] = torch.tensor(0.0).to(args.device)
+
         # _total_loss_scalar is updated everytime .item() has to be called on tr_loss and stores the sum of all losses
         self._total_loss_scalar = 0.0
-        self._current_loss_scalar = 0.0
+        self._total_domain_loss_scalar = {}
+        for i in range(len(train_dataloaders)):
+            self._total_domain_loss_scalar[f"domain_{i}"] = 0.0
 
         self._globalstep_last_logged = self.state.global_step
         model.zero_grad()
@@ -1284,7 +1290,7 @@ class Trainer:
                 parallel_loader = pl.ParallelLoader(train_dataloader, [args.device]).per_device_loader(args.device)
                 epoch_iterator = parallel_loader
             else:
-                epoch_iterator = tqdm(zip(*train_dataloaders), total=len(train_dataloaders[0]), desc="Iteration",
+                epoch_iterator = tqdm(zip(*train_dataloaders), total=dataloader_len, desc="Iteration",
                                       disable=args.local_rank not in [-1, 0])
 
             # Reset the past mems state at the beginning of each epoch if necessary.
@@ -1306,6 +1312,7 @@ class Trainer:
 
             for step, multi_batch in enumerate(epoch_iterator):
                 sum_losses = torch.tensor(0.0).to(args.device)
+
                 steps_in_multi_batch = 0
                 for ind, inputs in enumerate(multi_batch):
                     # Skip past any already trained steps if resuming training
@@ -1339,6 +1346,7 @@ class Trainer:
                     self.current_flos += float(self.floating_point_ops(inputs))
                     sum_losses += loss
                     steps_in_multi_batch += 1
+                    losses_per_domain_aggr[f"domain_{ind}"] += loss
 
                 # I summed the losses of all domains, so I should divide by X when I have seen all X domains once
                 # Steps_in_multi_batch = number of domains
@@ -1398,13 +1406,13 @@ class Trainer:
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
-                    self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+                    self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval, losses_per_domain_aggr)
 
                 if self.control.should_epoch_stop or self.control.should_training_stop:
                     break
                 steps += 1
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
-            self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+            self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval, losses_per_domain_aggr)
 
             if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
                 if is_torch_tpu_available():
@@ -1417,10 +1425,6 @@ class Trainer:
                     )
             if self.control.should_training_stop:
                 break
-
-            self._current_loss_scalar = tr_loss.item()
-            current_train_loss = self._current_loss_scalar / steps
-            print("\ntrain_loss {}".format(current_train_loss))
 
         if args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of training
@@ -1464,6 +1468,10 @@ class Trainer:
         metrics["total_flos"] = self.state.total_flos
         metrics["train_loss"] = train_loss
 
+        for i in range(len(losses_per_domain_aggr)):
+            self._total_domain_loss_scalar[f"domain_{i}"] += losses_per_domain_aggr[f"domain_{i}"].item()
+            metrics[f"train_loss_domain_{i}"] = self._total_domain_loss_scalar[f"domain_{i}"] / self.state.global_step
+
         self.is_in_train = False
 
         self._memory_tracker.stop_and_update_metrics(metrics)
@@ -1485,7 +1493,7 @@ class Trainer:
         if len(load_result.unexpected_keys) != 0:
             logger.warn(f"There were unexpected keys in the checkpoint model loaded: {load_result.unexpected_keys}.")
 
-    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
+    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval,  losses_per_domain=None):
         if self.control.should_log:
             logs: Dict[str, float] = {}
             tr_loss_scalar = tr_loss.item()
@@ -1494,7 +1502,13 @@ class Trainer:
 
             logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
             logs["learning_rate"] = self._get_learning_rate()
-
+            if losses_per_domain:
+                losses_per_domain_scalar = {}
+                for i, (key, value) in enumerate(losses_per_domain.items()):
+                    losses_per_domain_scalar[key] = value.item()
+                    losses_per_domain[key] -= losses_per_domain[key]
+                    logs[f"loss_domain_{i}"] = round(losses_per_domain_scalar[key] / (self.state.global_step - self._globalstep_last_logged), 4)
+                    self._total_domain_loss_scalar[f"domain_{i}"] += losses_per_domain_scalar[f"domain_{i}"]
             self._total_loss_scalar += tr_loss_scalar
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
@@ -2103,7 +2117,7 @@ class Trainer:
         eval_loop = self.prediction_loop if self.args.use_legacy_prediction_loop else self.evaluation_loop
 
         # I am passing the concatenation of dataloaders as argument to the eval_loop script
-        output, domain_losses = eval_loop(
+        output = eval_loop(
             dataloaders=eval_dataloaders,
             description="Evaluation",
             # No point gathering the predictions if there are no metrics, otherwise we defer to
@@ -2133,7 +2147,7 @@ class Trainer:
 
         self._memory_tracker.stop_and_update_metrics(output.metrics)
 
-        return output.metrics, domain_losses
+        return output.metrics
 
     def predict(
         self, test_dataset: Dataset, ignore_keys: Optional[List[str]] = None, metric_key_prefix: str = "test"
@@ -2381,7 +2395,7 @@ class Trainer:
         domain_losses = []
         for i, item in enumerate(metrics_list):
             domain_losses.append(item['eval_loss'])
-            print(f"\nEval loss for domain {i} is {item['eval_loss']}")
+            # print(f"\nEval loss for domain {i} is {item['eval_loss']}")
         if not all_pred_list[0]:
             all_preds = None
         if not all_labels_list[0]:
@@ -2394,7 +2408,9 @@ class Trainer:
             sum_samples += sample
         num_samples = sum_samples
         metrics[f"{metric_key_prefix}_loss"] = sum_metrics / len(metrics_list)
-        return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples), domain_losses
+        for i, item in enumerate(domain_losses):
+            metrics[f"{metric_key_prefix}_domain_loss_{i}"] = item
+        return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples)
 
     def _nested_gather(self, tensors, name=None):
         """
