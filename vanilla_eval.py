@@ -39,7 +39,10 @@ MODEL_CLASSES = {
 @click.option(
     "--dataset",
     default="wikitext2",
-    type=click.Choice(["wikitext2", "openwebtext", "mmap", "business", "money", "film", "music"]),
+    type=click.Choice(["wikitext2", "openwebtext", "mmap", "business", "money", "film", "music",
+                       'journals.plos.org',
+                       'www.frontiersin.org', 'www.latimes.com', 'www.nytimes.com'
+                       ]),
     show_choices=True,
     show_default=True,
     help="The dataset to evaluate on.",
@@ -69,18 +72,6 @@ MODEL_CLASSES = {
     show_default=True,
     help="""What model are we using""",
 )
-@click.option(
-    "--use-adapters",
-    default=False,
-    show_default=True,
-    help="""Should we use adapters""",
-)
-@click.option(
-    "--adapter-size",
-    default=256,
-    show_default=True,
-    help="""Size of bottleneck dimension""",
-)
 def main(
     model_name: str,
     dataset: str,
@@ -88,8 +79,6 @@ def main(
     block_size: int,
     batch_size: int,
     model_type: str,
-    use_adapters: bool,
-    adapter_size: int,
 ):
     """
     Evaluate a GPT-2 model on a dataset.
@@ -104,12 +93,10 @@ def main(
     config_class, tokenizer_class = MODEL_CLASSES[model_type]
 
     config = config_class.from_pretrained(model_type)
-    config.use_adapters = use_adapters
-    config.adapter_size = adapter_size
 
     tokenizer = GPT2Tokenizer.from_pretrained(model_name)
     model = GPT2LMHeadModel.from_pretrained(model_name, config=config)
-    # model = model.cuda()
+    model = model.cuda()
     print(model)
     click.secho("\n[2/3] Preprocessing data...", fg="green")
 
@@ -122,14 +109,15 @@ def main(
             block_size=block_size,
             num_workers=1,
         )
-    elif dataset in ['film', 'music', 'business', 'money']:
+    elif dataset in ['film', 'music', 'business', 'money', 'journals.plos.org',
+                     'www.frontiersin.org', 'www.latimes.com', 'www.nytimes.com']:
         dataset_object = get_domain_dataset(
             tokenizer,
             split="valid",
             block_size=block_size,
             num_workers=8,
             domain=f'{dataset}.val.json',
-            path='/home/alexandrac/projects/hierarchical-domain-adaptation/corpora/'
+            path='./corpora/'
         )
     elif dataset == "openwebtext":
         dataset_object = get_openwebtext_dataset(
