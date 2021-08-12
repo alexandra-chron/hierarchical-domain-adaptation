@@ -138,6 +138,13 @@ class DataTrainingArguments:
             "value if set."
         },
     )
+    truncate_train_samples_for_this_domain: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "For debugging purposes or quicker training, truncate the number of training examples of this "
+            "domain if set."
+        },
+    )
     max_eval_samples: Optional[int] = field(
         default=None,
         metadata={
@@ -440,6 +447,12 @@ def main():
         if data_args.max_train_samples is not None:
             for i in range(len(train_datasets)):
                 train_datasets[i] = train_datasets[i].select(range(data_args.max_train_samples))
+
+        # only truncate samples for a specific domain, keeping 1/4th
+        if data_args.truncate_train_samples_for_this_domain:
+            train_datasets[data_args.truncate_train_samples_for_this_domain] = \
+                train_datasets[data_args.truncate_train_samples_for_this_domain].select(
+                    range(len(train_datasets[data_args.truncate_train_samples_for_this_domain])//4))
 
     if training_args.do_eval:
         for domain in domains:
