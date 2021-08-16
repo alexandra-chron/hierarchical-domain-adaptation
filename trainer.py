@@ -1344,9 +1344,9 @@ class Trainer:
                         # After each loss.backward, already computed gradients are accumulated to existing gradients
                         loss.backward()
                     self.current_flos += float(self.floating_point_ops(inputs))
-                    sum_losses += loss
+                    sum_losses += loss.item()
                     steps_in_multi_batch += 1
-                    losses_per_domain_aggr[f"domain_{ind}"] += loss
+                    losses_per_domain_aggr[f"domain_{ind}"] += loss.item()
 
                 # I summed the losses of all domains, so I should divide by X when I have seen all X domains once
                 # Steps_in_multi_batch = number of domains
@@ -1448,6 +1448,8 @@ class Trainer:
                 state_dict = torch.load(best_model_path, map_location="cpu")
                 # If the model is on the GPU, it still works!
                 self._load_state_dict_in_model(state_dict)
+            
+                del state_dict
             else:
                 logger.warn(
                     f"Could not locate the best model at {best_model_path}, if you are running a distributed training "
