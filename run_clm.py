@@ -482,6 +482,26 @@ def main():
             checkpoint = training_args.resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
+
+        if trainer.state.global_step == 0:
+            logger.info("*** Evaluate before starting training ***")
+
+            metrics = trainer.evaluate()
+            # eval_loss here is the average of the eval_loss in X domains
+
+            len_eval_dataset = 0
+            for dataset in eval_datasets:
+                len_eval_dataset += len(dataset)
+            max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len_eval_dataset
+            metrics["eval_samples"] = min(max_eval_samples, len_eval_dataset)
+            try:
+                perplexity = math.exp(metrics["eval_loss"])
+            except OverflowError:
+                perplexity = float("inf")
+            metrics["perplexity"] = perplexity
+            trainer.log_metrics("eval", metrics)
+            trainer.save_metrics("eval", metrics)
+
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()  # Saves the tokenizer too for easy upload
 
