@@ -314,18 +314,27 @@ def main():
         data_files = {}
         for domain in domains:
             data_files[domain] = {}
-            for split in ["train", "valid"]:
-                if split == "valid": temp_split = "val"
-                else: temp_split = "train"
+            if training_args.do_train:
+                for split in ["train", "valid"]:
+                    if split == "valid": temp_split = "val"
+                    else: temp_split = "train"
+                    data_files[domain][split] = path + domain + "." + temp_split + ".json"
+            else:
+                split = "valid"
+                temp_split = "val"
                 data_files[domain][split] = path + domain + "." + temp_split + ".json"
 
         raw_datasets = {}
         for domain in domains:
             raw_datasets[domain] = {}
         for domain in domains:
-            for split in ["train", "valid"]:
-                raw_datasets[domain][split] = load_dataset("text", data_files={split: data_files[domain][split]},
-                                                           split=split, cache_dir=model_args.cache_dir)
+            if training_args.do_train:
+                for split in ["train", "valid"]:
+                    raw_datasets[domain][split] = load_dataset("text", data_files={split: data_files[domain][split]},
+                                                               split=split, cache_dir=model_args.cache_dir)
+            else:
+                raw_datasets[domain]["valid"] = load_dataset("text", data_files={"valid": data_files[domain]["valid"]},
+                                                           split="valid", cache_dir=model_args.cache_dir)
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -375,7 +384,18 @@ def main():
         tokenized_datasets = {}
         for domain in domains:
             tokenized_datasets[domain] = {}
-            for split in ["train", "valid"]:
+            if training_args.do_train:
+                for split in ["train", "valid"]:
+                    tokenized_datasets[domain][split] = raw_datasets[domain][split].map(
+                        tokenize_function,
+                        batched=True,
+                        num_proc=data_args.preprocessing_num_workers,
+                        remove_columns=column_names,
+                        load_from_cache_file=not data_args.overwrite_cache,
+                        desc="Running tokenizer on dataset",
+                    )
+            else:
+                split = "valid"
                 tokenized_datasets[domain][split] = raw_datasets[domain][split].map(
                     tokenize_function,
                     batched=True,
@@ -427,7 +447,18 @@ def main():
     lm_datasets = {}
     for domain in domains:
         lm_datasets[domain] = {}
-        for split in ["train", "valid"]:
+        if training_args.do_train:
+            for split in ["train", "valid"]:
+                with training_args.main_process_first(desc="grouping texts together"):
+                    lm_datasets[domain][split] = tokenized_datasets[domain][split].map(
+                        group_texts,
+                        batched=True,
+                        num_proc=data_args.preprocessing_num_workers,
+                        load_from_cache_file=not data_args.overwrite_cache,
+                        desc=f"Grouping texts in chunks of {block_size}",
+                    )
+        else:
+            split = "valid"
             with training_args.main_process_first(desc="grouping texts together"):
                 lm_datasets[domain][split] = tokenized_datasets[domain][split].map(
                     group_texts,
