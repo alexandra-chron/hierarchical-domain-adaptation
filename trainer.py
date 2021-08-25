@@ -657,7 +657,7 @@ class Trainer:
             ))
         return dataloaders
 
-    def _get_eval_sampler(self, eval_dataset: List[Dataset]) -> Optional[torch.utils.data.sampler.Sampler]:
+    def _get_eval_sampler(self, eval_dataset: Dataset) -> Optional[torch.utils.data.sampler.Sampler]:
         # Deprecated code
         if self.args.use_legacy_prediction_loop:
             if is_torch_tpu_available():
@@ -726,14 +726,16 @@ class Trainer:
                             ))
 
                 return eval_dataloaders
+        eval_samplers = []
+        for i, dataset in enumerate(eval_datasets):
+            eval_samplers.append(self._get_eval_sampler(dataset))
 
-        eval_sampler = self._get_eval_sampler(eval_datasets)
         eval_dataloaders = []
 
         for i, dataset in enumerate(eval_datasets):
             eval_dataloaders.append(DataLoader(
                 dataset,
-                sampler=eval_sampler,
+                sampler=eval_samplers[i],
                 batch_size=self.args.eval_batch_size,
                 collate_fn=self.data_collator,
                 drop_last=self.args.dataloader_drop_last,
@@ -2297,7 +2299,9 @@ class Trainer:
         # and this is what I feed to the EvalLoopOutput (return argument)
 
         for ind, dataloader in enumerate(dataloaders):
+            # print("We are in dataloader {}".format(ind))
             for step, inputs in enumerate(dataloader):
+                # print("We are in step {} of dataloader {}".format(step, ind))
                 # Update the observed num examples
                 observed_batch_size = find_batch_size(inputs)
                 if observed_batch_size is not None:
@@ -2337,7 +2341,7 @@ class Trainer:
 
                     # Set back to None to begin a new accumulation
                     losses_host, preds_host, labels_host = None, None, None
-
+            # print(len(losses))
             if self.args.past_index and hasattr(self, "_past"):
                 # Clean the state at the end of the evaluation loop
                 delattr(self, "_past")
