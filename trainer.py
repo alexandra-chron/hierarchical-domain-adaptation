@@ -2315,7 +2315,7 @@ class Trainer:
                     if losses_in_domain is not None:
                         losses_in_domain = np.concatenate((losses_in_domain, losses), axis=0)
                     else:
-                        losses_in_domain = np.array(losses)
+                        losses_in_domain = nested_numpify(losses)
                     losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
                 if logits is not None:
                     logits = self._pad_across_processes(logits)
