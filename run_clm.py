@@ -494,8 +494,8 @@ def main():
             eval_datasets.append(lm_datasets[domain]["valid"])
 
         if data_args.max_eval_samples is not None:
-            for i in range(len(eval_datasets)):
-                eval_datasets[i] = eval_datasets[i].select(range(data_args.max_train_samples))
+            for i in range(len(eval_datasets)-1):
+                eval_datasets[i] = eval_datasets[i].select(range(data_args.max_eval_samples))
 
     # Initialize our Trainer
     trainer = Trainer(

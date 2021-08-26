@@ -2290,8 +2290,7 @@ class Trainer:
 
         observed_num_examples = 0
         # Main evaluation loop
-        all_pred_list, all_labels_list, metrics_list, num_samples_list = [], [], [], []
-
+        all_pred_list, all_labels_list, num_samples_list, losses_list = [], [], [], []
         # Compared to single-task evaluation, again here we are adding an extra loop that iterates over the dataloader
         # of each of the domains
         # ind is passed to indicate domain and activate a subset of the adapters (the same as in training for now)
@@ -2299,9 +2298,8 @@ class Trainer:
         # and this is what I feed to the EvalLoopOutput (return argument)
 
         for ind, dataloader in enumerate(dataloaders):
-            # print("We are in dataloader {}".format(ind))
+            losses_in_domain = None
             for step, inputs in enumerate(dataloader):
-                # print("We are in step {} of dataloader {}".format(step, ind))
                 # Update the observed num examples
                 observed_batch_size = find_batch_size(inputs)
                 if observed_batch_size is not None:
@@ -2314,6 +2312,10 @@ class Trainer:
                 # Update containers on host
                 if loss is not None:
                     losses = self._nested_gather(loss.repeat(batch_size))
+                    if losses_in_domain is not None:
+                        losses_in_domain = np.concatenate((losses_in_domain, losses), axis=0)
+                    else:
+                        losses_in_domain = np.array(losses)
                     losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
                 if logits is not None:
                     logits = self._pad_across_processes(logits)
@@ -2373,49 +2375,39 @@ class Trainer:
                 all_losses = all_losses[:num_samples]
             if all_preds is not None:
                 all_preds = nested_truncate(all_preds, num_samples)
+                all_pred_list.append(all_preds)
             if all_labels is not None:
                 all_labels = nested_truncate(all_labels, num_samples)
+                all_labels_list.append(all_labels)
 
-            # Metrics!
-            if self.compute_metrics is not None and all_preds is not None and all_labels is not None:
-                metrics = self.compute_metrics(EvalPrediction(predictions=all_preds, label_ids=all_labels))
-            else:
-                metrics = {}
-
-            # To be JSON-serializable, we need to remove numpy types or zero-d tensors
-            metrics = denumpify_detensorize(metrics)
-
-            if all_losses is not None:
-                metrics[f"{metric_key_prefix}_loss"] = all_losses.mean().item()
-
-            # Prefix all keys with metric_key_prefix + '_'
-            for key in list(metrics.keys()):
-                if not key.startswith(f"{metric_key_prefix}_"):
-                    metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
-
-            all_pred_list.append(all_preds)
-            all_labels_list.append(all_labels)
-            metrics_list.append(metrics)
             num_samples_list.append(num_samples)
+            losses_list.append(losses_in_domain[:num_samples])
+        assert len(losses_list[0]) == num_examples[0], "The losses computed for domain 0 are not " \
+                                                       "equal to the number of evaluation samples!"
+        # Metrics!
+        if self.compute_metrics is not None and all_preds is not None and all_labels is not None:
+            metrics = self.compute_metrics(EvalPrediction(predictions=all_preds, label_ids=all_labels))
+        else:
+            metrics = {}
 
-        domain_losses = []
-        for i, item in enumerate(metrics_list):
-            domain_losses.append(item['eval_loss'])
-            # print(f"\nEval loss for domain {i} is {item['eval_loss']}")
-        if not all_pred_list[0]:
-            all_preds = None
-        if not all_labels_list[0]:
-            all_labels = None
+        # To be JSON-serializable, we need to remove numpy types or zero-d tensors
+        metrics = denumpify_detensorize(metrics)
         sum_metrics = 0
+        if losses_list is not None:
+            for i in range(len(losses_list)):
+                metrics[f"{metric_key_prefix}_domain_loss_{i}"] = losses_list[i].mean().item()
+                sum_metrics += metrics[f"{metric_key_prefix}_domain_loss_{i}"]
+        # Prefix all keys with metric_key_prefix + '_'
+        for key in list(metrics.keys()):
+            if not key.startswith(f"{metric_key_prefix}_"):
+                metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
+
         sum_samples = 0
-        for loss_dict in metrics_list:
-            sum_metrics += loss_dict[f"{metric_key_prefix}_loss"]
         for sample in num_samples_list:
             sum_samples += sample
         num_samples = sum_samples
-        metrics[f"{metric_key_prefix}_loss"] = sum_metrics / len(metrics_list)
-        for i, item in enumerate(domain_losses):
-            metrics[f"{metric_key_prefix}_domain_loss_{i}"] = item
+        metrics[f"{metric_key_prefix}_loss"] = sum_metrics / len(eval_datasets)
+
         return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples)
 
     def _nested_gather(self, tensors, name=None):
