@@ -2311,12 +2311,13 @@ class Trainer:
 
                 # Update containers on host
                 if loss is not None:
-                    losses = self._nested_gather(loss.repeat(batch_size))
+                    losses_tensor = self._nested_gather(loss.repeat(batch_size))
+                    losses = nested_numpify(losses_tensor)
                     if losses_in_domain is not None:
                         losses_in_domain = np.concatenate((losses_in_domain, losses), axis=0)
                     else:
-                        losses_in_domain = nested_numpify(losses)
-                    losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
+                        losses_in_domain = losses
+                    losses_host = losses_tensor if losses_host is None else torch.cat((losses_host, losses_tensor), dim=0)
                 if logits is not None:
                     logits = self._pad_across_processes(logits)
                     logits = self._nested_gather(logits)
