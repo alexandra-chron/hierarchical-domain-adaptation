@@ -411,7 +411,7 @@ class GPT2Block(nn.Module):
                 while ind != 0:  # while we haven't found the root of the tree
                     adapters_active += 1
                     adapter_outputs.append(self.adapter_module[ind-1](feed_forward_hidden_states))
-                    print("\n" + str(ind))
+                    # print("\n" + str(ind))
                     ind = self.domain_dict[ind]
 
                 leaf_adapter_output = adapter_outputs[0]
