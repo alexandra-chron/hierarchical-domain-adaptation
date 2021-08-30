@@ -479,11 +479,11 @@ def main():
             for i in range(len(train_datasets)):
                 train_datasets[i] = train_datasets[i].select(range(data_args.max_train_samples))
 
-        # only truncate samples for a specific domain, keeping 1/4th
+        # only truncate samples for a specific domain, keeping 1/5th
         if data_args.truncate_train_samples_for_this_domain:
-            train_datasets[data_args.truncate_train_samples_for_this_domain] = \
-                train_datasets[data_args.truncate_train_samples_for_this_domain].select(
-                    range(len(train_datasets[data_args.truncate_train_samples_for_this_domain])//5))
+            train_datasets[data_args.truncate_train_samples_for_this_domain-1] = \
+                train_datasets[data_args.truncate_train_samples_for_this_domain-1].select(
+                    range(len(train_datasets[data_args.truncate_train_samples_for_this_domain-1])//5))
         for i, domain in enumerate(domains):
             logger.info("Train dataset of domain {} length: {} rows.".format(domain, len(train_datasets[i])))
 
