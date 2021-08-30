@@ -654,7 +654,7 @@ class Trainer:
             ))
         return dataloaders
 
-    def _get_eval_sampler(self, eval_dataset: List[Dataset]) -> Optional[torch.utils.data.sampler.Sampler]:
+    def _get_eval_sampler(self, eval_dataset: Dataset) -> Optional[torch.utils.data.sampler.Sampler]:
         # Deprecated code
         if self.args.use_legacy_prediction_loop:
             if is_torch_tpu_available():
@@ -724,13 +724,16 @@ class Trainer:
 
                 return eval_dataloaders
 
-        eval_sampler = self._get_eval_sampler(eval_datasets)
+        eval_samplers = []
+        for i, dataset in enumerate(eval_datasets):
+            eval_samplers.append(self._get_eval_sampler(dataset))
+
         eval_dataloaders = []
 
         for i, dataset in enumerate(eval_datasets):
             eval_dataloaders.append(DataLoader(
                 dataset,
-                sampler=eval_sampler,
+                sampler=eval_samplers[i],
                 batch_size=self.args.eval_batch_size,
                 collate_fn=self.data_collator,
                 drop_last=self.args.dataloader_drop_last,
@@ -2299,8 +2302,8 @@ class Trainer:
 
         observed_num_examples = 0
         # Main evaluation loop
-        all_pred_list, all_labels_list, metrics_list, num_samples_list = [], [], [], []
-
+        all_pred_list, all_labels_list, num_samples_list, losses_list = [], [], [], []
+        losses_list_leaf, losses_list_parent, losses_list_grandparent = [], [], []
         # Compared to single-task evaluation, again here we are adding an extra loop that iterates over the dataloader
         # of each of the domains
         # ind is passed to indicate domain and activate a subset of the adapters (the same as in training for now)
@@ -2308,6 +2311,8 @@ class Trainer:
         # and this is what I feed to the EvalLoopOutput (return argument)
 
         for ind, dataloader in enumerate(dataloaders):
+            losses_in_domain = None
+            losses_in_domain_leaf, losses_in_domain_parent, losses_in_domain_grandparent = None, None, None
             for step, inputs in enumerate(dataloader):
                 # Update the observed num examples
                 observed_batch_size = find_batch_size(inputs)
@@ -2328,20 +2333,39 @@ class Trainer:
                                                               dataset_ind=ind + 1, alt=True, eval="grandparent")
                 # Update containers on host
                 if loss is not None:
-                    losses = self._nested_gather(loss.repeat(batch_size))
-                    losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
+                    losses_tensor = self._nested_gather(loss.repeat(batch_size))
+                    losses = nested_numpify(losses_tensor)
+                    if losses_in_domain is not None:
+                        losses_in_domain = np.concatenate((losses_in_domain, losses), axis=0)
+                    else:
+                        losses_in_domain = losses
+                    losses_host = losses_tensor if losses_host is None else torch.cat((losses_host, losses_tensor), dim=0)
 
-                    losses_leaf = self._nested_gather(loss_leaf.repeat(batch_size))
-                    losses_host_leaf = losses_leaf if losses_host_leaf is None else torch.cat(
-                        (losses_host_leaf, losses_leaf), dim=0)
+                    losses_leaf_tensor = self._nested_gather(loss_leaf.repeat(batch_size))
+                    losses_leaf = nested_numpify(losses_leaf_tensor)
+                    if losses_in_domain_leaf is not None:
+                        losses_in_domain_leaf = np.concatenate((losses_in_domain_leaf, losses_leaf), axis=0)
+                    else:
+                        losses_in_domain_leaf = losses_leaf 
+                    losses_host_leaf = losses_leaf_tensor if losses_host_leaf is None else torch.cat((losses_host_leaf, losses_leaf_tensor), dim=0)
 
-                    losses_parent = self._nested_gather(loss_parent.repeat(batch_size))
-                    losses_host_parent = losses_parent if losses_host_parent is None else torch.cat(
-                        (losses_host_parent, losses_parent), dim=0)
+                    losses_parent_tensor = self._nested_gather(loss_parent.repeat(batch_size))
+                    losses_parent = nested_numpify(losses_parent_tensor)
+                    if losses_in_domain_parent is not None:
+                        losses_in_domain_parent = np.concatenate((losses_in_domain_parent, losses_parent), axis=0)
+                    else:
+                        losses_in_domain_parent = losses_parent
+                    losses_host_parent = losses_parent_tensor if losses_host_parent is None else torch.cat((losses_host_parent,
+                                                                                                            losses_parent_tensor), dim=0)
 
-                    losses_grandparent = self._nested_gather(loss_grandparent.repeat(batch_size))
-                    losses_host_grandparent = losses_grandparent if losses_host_grandparent is None else \
-                        torch.cat((losses_host_grandparent, losses_grandparent), dim=0)
+                    losses_grandparent_tensor = self._nested_gather(loss_grandparent.repeat(batch_size))
+                    losses_grandparent = nested_numpify(losses_grandparent_tensor)
+                    if losses_in_domain_grandparent is not None:
+                        losses_in_domain_grandparent = np.concatenate((losses_in_domain_grandparent, losses_grandparent), axis=0)
+                    else:
+                        losses_in_domain_grandparent = losses_grandparent
+                    losses_host_grandparent = losses_grandparent_tensor if losses_host_grandparent is None else torch.cat((losses_host_grandparent,
+                                                                                                            losses_grandparent_tensor), dim=0)
 
                 if logits is not None:
                     logits = self._pad_across_processes(logits)
@@ -2440,72 +2464,44 @@ class Trainer:
 
             if all_preds is not None:
                 all_preds = nested_truncate(all_preds, num_samples)
+                all_pred_list.append(all_preds)
             if all_labels is not None:
                 all_labels = nested_truncate(all_labels, num_samples)
+                all_labels_list.append(all_labels)
 
-            # Metrics!
-            if self.compute_metrics is not None and all_preds is not None and all_labels is not None:
-                metrics = self.compute_metrics(EvalPrediction(predictions=all_preds, label_ids=all_labels))
-            else:
-                metrics = {}
-
-            # To be JSON-serializable, we need to remove numpy types or zero-d tensors
-            metrics = denumpify_detensorize(metrics)
-
-            if all_losses is not None:
-                metrics[f"{metric_key_prefix}_loss"] = all_losses.mean().item()
-            if all_losses_leaf is not None:
-                metrics[f"{metric_key_prefix}_loss_leaf"] = all_losses_leaf.mean().item()
-            if all_losses_parent is not None:
-                metrics[f"{metric_key_prefix}_loss_parent"] = all_losses_parent.mean().item()
-            if all_losses_grandparent is not None:
-                metrics[f"{metric_key_prefix}_loss_grandparent"] = all_losses_grandparent.mean().item()
-
-            # Prefix all keys with metric_key_prefix + '_'
-            for key in list(metrics.keys()):
-                if not key.startswith(f"{metric_key_prefix}_"):
-                    metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
-
-            all_pred_list.append(all_preds)
-            all_labels_list.append(all_labels)
-            metrics_list.append(metrics)
             num_samples_list.append(num_samples)
+            losses_list.append(losses_in_domain[:num_samples])
 
-        domain_losses = []
-        domain_losses_leaf = []
-        domain_losses_parent = []
-        domain_losses_grandparent = []
-        for i, item in enumerate(metrics_list):
-            if item['eval_loss']:
-                domain_losses.append(item['eval_loss'])
-            if item['eval_loss_leaf']:
-                domain_losses_leaf.append(item['eval_loss_leaf'])
-            if item['eval_loss_parent']:
-                domain_losses_parent.append(item['eval_loss_parent'])
-            if item['eval_loss_grandparent']:
-                domain_losses_grandparent.append(item['eval_loss_grandparent'])
+            losses_list_leaf.append(losses_in_domain_leaf[:num_samples])
+            losses_list_parent.append(losses_in_domain_parent[:num_samples])
+            losses_list_grandparent.append(losses_in_domain_grandparent[:num_samples])
 
-            # print(f"\nEval loss for domain {i} is {item['eval_loss']}")
-        if not all_pred_list[0]:
-            all_preds = None
-        if not all_labels_list[0]:
-            all_labels = None
+        # Metrics!
+        if self.compute_metrics is not None and all_preds is not None and all_labels is not None:
+            metrics = self.compute_metrics(EvalPrediction(predictions=all_preds, label_ids=all_labels))
+        else:
+            metrics = {}
+
+        # To be JSON-serializable, we need to remove numpy types or zero-d tensors
+        metrics = denumpify_detensorize(metrics)
         sum_metrics = 0
+        if losses_list is not None:
+            for i in range(len(losses_list)):
+                metrics[f"{metric_key_prefix}_domain_loss_{i}"] = losses_list[i].mean().item()
+                metrics[f"{metric_key_prefix}_domain_loss_leaf_{i}"] = losses_list_leaf[i].mean().item()
+                metrics[f"{metric_key_prefix}_domain_loss_parent{i}"] = losses_list_parent[i].mean().item()
+                metrics[f"{metric_key_prefix}_domain_loss_grandparent{i}"] = losses_list_grandparent[i].mean().item()
+                sum_metrics += metrics[f"{metric_key_prefix}_domain_loss_{i}"]
+        # Prefix all keys with metric_key_prefix + '_'
+        for key in list(metrics.keys()):
+            if not key.startswith(f"{metric_key_prefix}_"):
+                metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
+
         sum_samples = 0
-        for loss_dict in metrics_list:
-            sum_metrics += loss_dict[f"{metric_key_prefix}_loss"]
         for sample in num_samples_list:
             sum_samples += sample
         num_samples = sum_samples
-        metrics[f"{metric_key_prefix}_loss"] = sum_metrics / len(metrics_list)
-        for i, item in enumerate(domain_losses):
-            metrics[f"{metric_key_prefix}_domain_loss_{i}"] = item
-        for i, item in enumerate(domain_losses_leaf):
-            metrics[f"{metric_key_prefix}_domain_loss_{i}_leaf"] = item
-        for i, item in enumerate(domain_losses_parent):
-            metrics[f"{metric_key_prefix}_domain_loss_{i}_parent"] = item
-        for i, item in enumerate(domain_losses_grandparent):
-            metrics[f"{metric_key_prefix}_domain_loss_{i}_grandparent"] = item
+        metrics[f"{metric_key_prefix}_loss"] = sum_metrics / len(eval_datasets)
 
         return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples)
 
