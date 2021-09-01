@@ -29,7 +29,7 @@ import warnings
 from logging import StreamHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
-
+from itertools import cycle
 from tqdm.auto import tqdm
 
 
@@ -1281,6 +1281,7 @@ class Trainer:
                         break
         steps = 0
         for epoch in range(epochs_trained, num_train_epochs):
+            num_tokens_per_domain = 0
             for train_dataloader in train_dataloaders:
                 if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                     train_dataloader.sampler.set_epoch(epoch)
@@ -1292,13 +1293,25 @@ class Trainer:
                 parallel_loader = pl.ParallelLoader(train_dataloader, [args.device]).per_device_loader(args.device)
                 epoch_iterator = parallel_loader
             else:
-                epoch_iterator = tqdm(zip(*train_dataloaders), total=dataloader_len, desc="Iteration",
-                                      disable=args.local_rank not in [-1, 0])
-
+                dl_len = []
+                for ind, dataloader in enumerate(train_dataloaders):
+                    dl_len.append(len(dataloader))
+                sorted_ind = np.argsort(dl_len)
+                epoch_iterator = zip(cycle(train_dataloaders[sorted_ind[0]]),
+                                     cycle(train_dataloaders[sorted_ind[1]]),
+                                     cycle(train_dataloaders[sorted_ind[2]]),
+                                     train_dataloaders[sorted_ind[3]])
+                if epoch == 0:
+                    logger.warning("The size of my largest dataset is {}".format(dl_len[sorted_ind[-1]]))
+                    logger.warning("I will be sampling a batch of each dataset at every step -- {} times in total (repeating "
+                                "the samples of the lower-resource datasets)".format(len(list(epoch_iterator))))
+                    logger.warning("If you multiply that by the batch size: {}, you should be getting the "
+                                "size of the biggest dataset.".format(train_dataloaders[0].batch_size))
             # Reset the past mems state at the beginning of each epoch if necessary.
             if args.past_index >= 0:
                 self._past = None
-
+            epoch_iterator = tqdm(epoch_iterator, total=dl_len[sorted_ind[-1]], desc="Iteration",
+                                      disable=args.local_rank not in [-1, 0])
             steps_in_epoch = (
                 len(epoch_iterator) if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
             )
@@ -1313,6 +1326,13 @@ class Trainer:
             # currently gradient accumulation = len(domains)
 
             for step, multi_batch in enumerate(epoch_iterator):
+                # num_tokens_per_domain = batch_size * block_size
+                num_tokens_per_domain += len(multi_batch[0]['input_ids']) * len(multi_batch[0]['input_ids'][0])
+                total_num_tokens_per_domain = dl_len[sorted_ind[-1]] *  len(multi_batch[0]['input_ids'][0])
+                if step % 50 == 0:
+                    print("\n{}/{} tokens per domain processed "
+                          "in this epoch.".format(num_tokens_per_domain, total_num_tokens_per_domain))
+
                 sum_losses = torch.tensor(0.0).to(args.device)
 
                 steps_in_multi_batch = 0
