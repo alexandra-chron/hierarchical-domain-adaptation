@@ -477,8 +477,7 @@ def main():
 
         if data_args.max_train_samples is not None:
             for i in range(len(train_datasets)):
-                train_datasets[i] = train_datasets[i][:data_args.max_train_samples]
-
+                train_datasets[i] = train_datasets[i].select(range(data_args.max_train_samples))
         # only truncate samples for a specific domain, keeping 1/5th
         if data_args.truncate_train_samples_for_this_domain:
             train_datasets[data_args.truncate_train_samples_for_this_domain-1] = \
