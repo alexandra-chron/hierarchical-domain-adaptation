@@ -1281,7 +1281,7 @@ class Trainer:
                         break
         steps = 0
         for epoch in range(epochs_trained, num_train_epochs):
-            num_tokens_per_domain = 0
+            # num_tokens_per_domain = 0
             for train_dataloader in train_dataloaders:
                 if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                     train_dataloader.sampler.set_epoch(epoch)
@@ -1327,11 +1327,11 @@ class Trainer:
 
             for step, multi_batch in enumerate(epoch_iterator):
                 # num_tokens_per_domain = batch_size * block_size
-                num_tokens_per_domain += len(multi_batch[0]['input_ids']) * len(multi_batch[0]['input_ids'][0])
-                total_num_tokens_per_domain = dl_len[sorted_ind[-1]] *  len(multi_batch[0]['input_ids'][0])
-                if step % 50 == 0:
-                    print("\n{}/{} tokens per domain processed "
-                          "in this epoch.".format(num_tokens_per_domain, total_num_tokens_per_domain))
+                # num_tokens_per_domain += len(multi_batch[0]['input_ids']) * len(multi_batch[0]['input_ids'][0])
+                # total_num_tokens_per_domain = dl_len[sorted_ind[-1]] *  len(multi_batch[0]['input_ids'][0])
+                # if step % 50 == 0:
+                #     print("\n{}/{} tokens per domain processed "
+                #           "in this epoch.".format(num_tokens_per_domain, total_num_tokens_per_domain))
 
                 sum_losses = torch.tensor(0.0).to(args.device)
 
