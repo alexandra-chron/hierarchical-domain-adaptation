@@ -1374,70 +1374,73 @@ class Trainer:
                     sum_losses += loss.item()
                     steps_in_multi_batch += 1
                     losses_per_domain_aggr[f"domain_{ind}"] += loss.item()
+                    # because very large batches (and grad accum) create a OOM issue, we perform the backprop step
+                    # twice during an epoch
+                    if ind == len(multi_batch) // 2 or ind == len(multi_batch):
 
-                # I summed the losses of all domains, so I should divide by X when I have seen all X domains once
-                # Steps_in_multi_batch = number of domains
-                tr_loss += (sum_losses / steps_in_multi_batch).item()
+                        # I summed the losses of all domains, so I should divide by X when I have seen all X domains once
+                        # Steps_in_multi_batch = number of domains
+                        tr_loss += (sum_losses / steps_in_multi_batch).item()
 
-                # Optimizer step for deepspeed must be called on every step regardless of the value
-                # of gradient_accumulation_steps
-                if self.deepspeed:
-                    self.deepspeed.step()
+                        # Optimizer step for deepspeed must be called on every step regardless of the value
+                        # of gradient_accumulation_steps
+                        if self.deepspeed:
+                            self.deepspeed.step()
 
-                if (step + 1) % args.gradient_accumulation_steps == 0 or (
-                    # last step in epoch but step is always smaller than gradient_accumulation_steps
-                    steps_in_epoch <= args.gradient_accumulation_steps
-                    and (step + 1) == steps_in_epoch
-                ):
-                    # Gradient clipping
-                    if args.max_grad_norm is not None and args.max_grad_norm > 0 and not self.deepspeed:
-                        # deepspeed does its own clipping
+                        if (step + 1) % args.gradient_accumulation_steps == 0 or (
+                            # last step in epoch but step is always smaller than gradient_accumulation_steps
+                            steps_in_epoch <= args.gradient_accumulation_steps
+                            and (step + 1) == steps_in_epoch
+                        ):
+                            # Gradient clipping
+                            if args.max_grad_norm is not None and args.max_grad_norm > 0 and not self.deepspeed:
+                                # deepspeed does its own clipping
 
-                        if self.use_amp:
-                            # AMP: gradients need unscaling
-                            self.scaler.unscale_(self.optimizer)
+                                if self.use_amp:
+                                    # AMP: gradients need unscaling
+                                    self.scaler.unscale_(self.optimizer)
 
-                        if hasattr(self.optimizer, "clip_grad_norm"):
-                            # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
-                            self.optimizer.clip_grad_norm(args.max_grad_norm)
-                        elif hasattr(model, "clip_grad_norm_"):
-                            # Some models (like FullyShardedDDP) have a specific way to do gradient clipping
-                            model.clip_grad_norm_(args.max_grad_norm)
-                        else:
-                            # Revert to normal clipping otherwise, handling Apex or full precision
-                            nn.utils.clip_grad_norm_(
-                                amp.master_params(self.optimizer) if self.use_apex else model.parameters(),
-                                args.max_grad_norm,
-                            )
+                                if hasattr(self.optimizer, "clip_grad_norm"):
+                                    # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
+                                    self.optimizer.clip_grad_norm(args.max_grad_norm)
+                                elif hasattr(model, "clip_grad_norm_"):
+                                    # Some models (like FullyShardedDDP) have a specific way to do gradient clipping
+                                    model.clip_grad_norm_(args.max_grad_norm)
+                                else:
+                                    # Revert to normal clipping otherwise, handling Apex or full precision
+                                    nn.utils.clip_grad_norm_(
+                                        amp.master_params(self.optimizer) if self.use_apex else model.parameters(),
+                                        args.max_grad_norm,
+                                    )
 
-                    # Optimizer step
-                    optimizer_was_run = True
-                    if self.deepspeed:
-                        pass  # called outside the loop
-                    elif is_torch_tpu_available():
-                        xm.optimizer_step(self.optimizer)
-                    elif self.use_amp:
-                        scale_before = self.scaler.get_scale()
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                        scale_after = self.scaler.get_scale()
-                        optimizer_was_run = scale_before <= scale_after
-                    else:
-                        self.optimizer.step()
+                            # Optimizer step
+                            optimizer_was_run = True
+                            if self.deepspeed:
+                                pass  # called outside the loop
+                            elif is_torch_tpu_available():
+                                xm.optimizer_step(self.optimizer)
+                            elif self.use_amp:
+                                scale_before = self.scaler.get_scale()
+                                self.scaler.step(self.optimizer)
+                                self.scaler.update()
+                                scale_after = self.scaler.get_scale()
+                                optimizer_was_run = scale_before <= scale_after
+                            else:
+                                self.optimizer.step()
+                                logger.warning("Index is {}, epoch is {} and I took a step in the optimizer.".format(ind, epoch))
+                            if optimizer_was_run and not self.deepspeed:
+                                self.lr_scheduler.step()
 
-                    if optimizer_was_run and not self.deepspeed:
-                        self.lr_scheduler.step()
+                            model.zero_grad()
+                            self.state.global_step += 1
+                            self.state.epoch = epoch + (step + 1) / steps_in_epoch
+                            self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
-                    model.zero_grad()
-                    self.state.global_step += 1
-                    self.state.epoch = epoch + (step + 1) / steps_in_epoch
-                    self.control = self.callback_handler.on_step_end(args, self.state, self.control)
+                            self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval, losses_per_domain_aggr)
 
-                    self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval, losses_per_domain_aggr)
-
-                if self.control.should_epoch_stop or self.control.should_training_stop:
-                    break
-                steps += 1
+                        if self.control.should_epoch_stop or self.control.should_training_stop:
+                            break
+                        steps += 1
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
             self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval, losses_per_domain_aggr)
 
