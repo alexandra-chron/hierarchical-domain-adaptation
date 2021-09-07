@@ -1297,7 +1297,8 @@ class Trainer:
                 for ind, dataloader in enumerate(train_dataloaders):
                     dl_len.append(len(dataloader))
                 sorted_ind = np.argsort(dl_len)
-                if len(dl_len) == 4:
+                if len(dl_len) == 4 and\
+                        len(train_dataloaders[sorted_ind[3]]) > len(train_dataloaders[sorted_ind[2]]):
                     epoch_iterator = zip(cycle(train_dataloaders[sorted_ind[0]]),
                                          cycle(train_dataloaders[sorted_ind[1]]),
                                          cycle(train_dataloaders[sorted_ind[2]]),
@@ -1305,7 +1306,10 @@ class Trainer:
                 elif len(dl_len) == 1:
                     epoch_iterator = zip(train_dataloaders[0])
                 else:
-                    logger.warning("Check the number of domains (currently accepting either 1 or 4)")
+                    epoch_iterator = zip(train_dataloaders[sorted_ind[0]],
+                                         train_dataloaders[sorted_ind[1]],
+                                         train_dataloaders[sorted_ind[2]],
+                                         train_dataloaders[sorted_ind[3]])
                 if epoch == 0:
                     logger.warning("The size of my largest dataset is {}".format(dl_len[sorted_ind[-1]]))
                     logger.warning("I will be sampling a batch of each dataset at every step -- {} times in total (repeating "
