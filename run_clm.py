@@ -171,6 +171,12 @@ class DataTrainingArguments:
             "help": "Size of each adapter layer"
         },
     )
+    vocab_overlap: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Compute the vocabulary overlap of given domains"
+        },
+    )
     use_tree_structure: Optional[bool] = field(
         default=True,
         metadata={
@@ -268,6 +274,7 @@ def main():
     config.num_domains = data_args.num_domains
     config.adapter_size = data_args.adapter_size
     config.use_tree_structure = data_args.use_tree_structure
+    config.vocab_overlap = data_args.vocab_overlap
 
     if config.num_domains:
         with open('domain_dict.json', 'r') as f:
@@ -467,6 +474,21 @@ def main():
                     load_from_cache_file=not data_args.overwrite_cache,
                     desc=f"Grouping texts in chunks of {block_size}",
                 )
+    if config.vocab_overlap:
+        vocab = {}
+        for domain in domains:
+            vocab[domain] = set()
+            for row in range(len(lm_datasets[domain]['train'].data.columns[1])):
+                for token_id in lm_datasets[domain]['train'].data.columns[1][row]:
+                    if token_id not in vocab:
+                        vocab[domain].add(int(str((token_id))))
+        for i, current_domain in enumerate(domains):
+            for next_domain in domains[i+1:]:
+                if len(domains[i+1:]) > 0:
+                    vocab_overlap = len(vocab[current_domain].intersection(vocab[next_domain]))
+                    logger.warning("The vocabulary overlap between {} and {} is {}.".format(current_domain,
+                                                                                   next_domain,
+                                                                                   vocab_overlap))
     train_datasets = []
     eval_datasets = []
     if training_args.do_train:
