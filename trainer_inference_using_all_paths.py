@@ -2388,10 +2388,10 @@ class Trainer:
 
                     # Set back to None to begin a new accumulation
                     losses_host, preds_host, labels_host = None, None, None
-            print("    For domain {}, path 0 was chosen {} times.".format(ind, path_chosen[0]))
-            print("    For domain {}, path 1 was chosen {} times.".format(ind, path_chosen[1]))
-            print("    For domain {}, path 2 was chosen {} times.".format(ind, path_chosen[2]))
-            print("    For domain {}, path 3 was chosen {} times.".format(ind, path_chosen[3]))
+            logger.warning("  For domain {}, path 0 was chosen {} times.".format(ind, path_chosen[0]))
+            logger.warning("  For domain {}, path 1 was chosen {} times.".format(ind, path_chosen[1]))
+            logger.warning("  For domain {}, path 2 was chosen {} times.".format(ind, path_chosen[2]))
+            logger.warning("  For domain {}, path 3 was chosen {} times.".format(ind, path_chosen[3]))
 
             # print(len(losses))
             if self.args.past_index and hasattr(self, "_past"):
