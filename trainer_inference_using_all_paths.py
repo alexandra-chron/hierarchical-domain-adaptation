@@ -1297,7 +1297,8 @@ class Trainer:
                 for ind, dataloader in enumerate(train_dataloaders):
                     dl_len.append(len(dataloader))
                 sorted_ind = np.argsort(dl_len)
-                if len(dl_len) == 4:
+                if len(dl_len) == 4 and\
+                        len(train_dataloaders[sorted_ind[3]]) > len(train_dataloaders[sorted_ind[2]]):
                     epoch_iterator = zip(cycle(train_dataloaders[sorted_ind[0]]),
                                          cycle(train_dataloaders[sorted_ind[1]]),
                                          cycle(train_dataloaders[sorted_ind[2]]),
@@ -1305,7 +1306,10 @@ class Trainer:
                 elif len(dl_len) == 1:
                     epoch_iterator = zip(train_dataloaders[0])
                 else:
-                    logger.warning("Check the number of domains (currently accepting either 1 or 4)")
+                    epoch_iterator = zip(train_dataloaders[sorted_ind[0]],
+                                         train_dataloaders[sorted_ind[1]],
+                                         train_dataloaders[sorted_ind[2]],
+                                         train_dataloaders[sorted_ind[3]])
                 if epoch == 0:
                     logger.warning("The size of my largest dataset is {}".format(dl_len[sorted_ind[-1]]))
                     logger.warning("I will be sampling a batch of each dataset at every step -- {} times in total (repeating "
@@ -1374,73 +1378,70 @@ class Trainer:
                     sum_losses += loss.item()
                     steps_in_multi_batch += 1
                     losses_per_domain_aggr[f"domain_{ind}"] += loss.item()
-                    # because very large batches (and grad accum) create a OOM issue, we perform the backprop step
-                    # twice during an epoch
-                    if ind == len(multi_batch) // 2 or ind == len(multi_batch):
 
-                        # I summed the losses of all domains, so I should divide by X when I have seen all X domains once
-                        # Steps_in_multi_batch = number of domains
-                        tr_loss += (sum_losses / steps_in_multi_batch).item()
+                # I summed the losses of all domains, so I should divide by X when I have seen all X domains once
+                # Steps_in_multi_batch = number of domains
+                tr_loss += (sum_losses / steps_in_multi_batch).item()
 
-                        # Optimizer step for deepspeed must be called on every step regardless of the value
-                        # of gradient_accumulation_steps
-                        if self.deepspeed:
-                            self.deepspeed.step()
+                # Optimizer step for deepspeed must be called on every step regardless of the value
+                # of gradient_accumulation_steps
+                if self.deepspeed:
+                    self.deepspeed.step()
 
-                        if (step + 1) % args.gradient_accumulation_steps == 0 or (
-                            # last step in epoch but step is always smaller than gradient_accumulation_steps
-                            steps_in_epoch <= args.gradient_accumulation_steps
-                            and (step + 1) == steps_in_epoch
-                        ):
-                            # Gradient clipping
-                            if args.max_grad_norm is not None and args.max_grad_norm > 0 and not self.deepspeed:
-                                # deepspeed does its own clipping
+                if (step + 1) % args.gradient_accumulation_steps == 0 or (
+                    # last step in epoch but step is always smaller than gradient_accumulation_steps
+                    steps_in_epoch <= args.gradient_accumulation_steps
+                    and (step + 1) == steps_in_epoch
+                ):
+                    # Gradient clipping
+                    if args.max_grad_norm is not None and args.max_grad_norm > 0 and not self.deepspeed:
+                        # deepspeed does its own clipping
 
-                                if self.use_amp:
-                                    # AMP: gradients need unscaling
-                                    self.scaler.unscale_(self.optimizer)
+                        if self.use_amp:
+                            # AMP: gradients need unscaling
+                            self.scaler.unscale_(self.optimizer)
 
-                                if hasattr(self.optimizer, "clip_grad_norm"):
-                                    # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
-                                    self.optimizer.clip_grad_norm(args.max_grad_norm)
-                                elif hasattr(model, "clip_grad_norm_"):
-                                    # Some models (like FullyShardedDDP) have a specific way to do gradient clipping
-                                    model.clip_grad_norm_(args.max_grad_norm)
-                                else:
-                                    # Revert to normal clipping otherwise, handling Apex or full precision
-                                    nn.utils.clip_grad_norm_(
-                                        amp.master_params(self.optimizer) if self.use_apex else model.parameters(),
-                                        args.max_grad_norm,
-                                    )
+                        if hasattr(self.optimizer, "clip_grad_norm"):
+                            # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
+                            self.optimizer.clip_grad_norm(args.max_grad_norm)
+                        elif hasattr(model, "clip_grad_norm_"):
+                            # Some models (like FullyShardedDDP) have a specific way to do gradient clipping
+                            model.clip_grad_norm_(args.max_grad_norm)
+                        else:
+                            # Revert to normal clipping otherwise, handling Apex or full precision
+                            nn.utils.clip_grad_norm_(
+                                amp.master_params(self.optimizer) if self.use_apex else model.parameters(),
+                                args.max_grad_norm,
+                            )
 
-                            # Optimizer step
-                            optimizer_was_run = True
-                            if self.deepspeed:
-                                pass  # called outside the loop
-                            elif is_torch_tpu_available():
-                                xm.optimizer_step(self.optimizer)
-                            elif self.use_amp:
-                                scale_before = self.scaler.get_scale()
-                                self.scaler.step(self.optimizer)
-                                self.scaler.update()
-                                scale_after = self.scaler.get_scale()
-                                optimizer_was_run = scale_before <= scale_after
-                            else:
-                                self.optimizer.step()
-                                logger.warning("Index is {}, epoch is {} and I took a step in the optimizer.".format(ind, epoch))
-                            if optimizer_was_run and not self.deepspeed:
-                                self.lr_scheduler.step()
+                    # Optimizer step
+                    optimizer_was_run = True
+                    if self.deepspeed:
+                        pass  # called outside the loop
+                    elif is_torch_tpu_available():
+                        xm.optimizer_step(self.optimizer)
+                    elif self.use_amp:
+                        scale_before = self.scaler.get_scale()
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                        scale_after = self.scaler.get_scale()
+                        optimizer_was_run = scale_before <= scale_after
+                    else:
+                        self.optimizer.step()
 
-                            model.zero_grad()
-                            self.state.global_step += 1
-                            self.state.epoch = epoch + (step + 1) / steps_in_epoch
-                            self.control = self.callback_handler.on_step_end(args, self.state, self.control)
+                    if optimizer_was_run and not self.deepspeed:
+                        self.lr_scheduler.step()
 
-                            self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval, losses_per_domain_aggr)
+                    model.zero_grad()
+                    self.state.global_step += 1
+                    self.state.epoch = epoch + (step + 1) / steps_in_epoch
+                    self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
-                        if self.control.should_epoch_stop or self.control.should_training_stop:
-                            break
-                        steps += 1
+                    self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval, losses_per_domain_aggr)
+
+                if self.control.should_epoch_stop or self.control.should_training_stop:
+                    break
+                steps += 1
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
             self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval, losses_per_domain_aggr)
 
@@ -1907,7 +1908,7 @@ class Trainer:
 
         return loss
 
-    def compute_loss(self, model, inputs, return_outputs=False, dataset_ind=None):
+    def compute_loss(self, model, inputs, return_outputs=False, dataset_ind=None, path=None):
         """
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
 
@@ -1917,7 +1918,7 @@ class Trainer:
             labels = inputs.pop("labels")
         else:
             labels = None
-        outputs = model(**inputs, dataset_ind=dataset_ind)
+        outputs = model(**inputs, dataset_ind=dataset_ind, path=path)
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
@@ -2334,9 +2335,20 @@ class Trainer:
                     observed_num_examples += observed_batch_size
 
                 # Prediction step
-                loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
-                                                            dataset_ind=ind+1)
+                loss1, logits1, labels1 = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
+                                                            dataset_ind=ind+1, path=0)
+                loss2, logits2, labels2 = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
+                                                            dataset_ind=ind+1, path=1)
+                loss3, logits3, labels3 = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
+                                                            dataset_ind=ind+1, path=2)
+                loss4, logits4, labels4 = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
+                                                            dataset_ind=ind+1, path=3)
 
+                index_min = np.argmin([loss1, loss2, loss3, loss4])
+                print("    For step {} in dataloader {}, minimum loss is given by path {}.".format(step, ind, index_min))
+                loss = min(loss1, loss2, loss3, loss4)
+                logits = logits1
+                labels = labels1
                 # Update containers on host
                 if loss is not None:
                     losses_tensor = self._nested_gather(loss.repeat(batch_size))
@@ -2494,7 +2506,7 @@ class Trainer:
         model: nn.Module,
         inputs: Dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = None, dataset_ind=None
+        ignore_keys: Optional[List[str]] = None, dataset_ind=None, path=None
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Perform an evaluation step on :obj:`model` using obj:`inputs`.
@@ -2557,7 +2569,7 @@ class Trainer:
                     logits = smp_nested_concat(logits_mb)
             else:
                 if has_labels:
-                    loss, outputs = self.compute_loss(model, inputs, return_outputs=True, dataset_ind=dataset_ind)
+                    loss, outputs = self.compute_loss(model, inputs, return_outputs=True, dataset_ind=dataset_ind, path=path)
                     loss = loss.mean().detach()
                     if isinstance(outputs, dict):
                         logits = tuple(v for k, v in outputs.items() if k not in ignore_keys + ["loss"])
