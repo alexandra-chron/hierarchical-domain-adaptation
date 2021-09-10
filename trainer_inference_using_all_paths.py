@@ -2328,6 +2328,8 @@ class Trainer:
 
         for ind, dataloader in enumerate(dataloaders):
             losses_in_domain = None
+            path_chosen = {}
+            path_chosen[0], path_chosen[1], path_chosen[2], path_chosen[3] = 0,0,0,0
             for step, inputs in enumerate(dataloader):
                 # Update the observed num examples
                 observed_batch_size = find_batch_size(inputs)
@@ -2345,7 +2347,9 @@ class Trainer:
                                                             dataset_ind=ind+1, path=3)
 
                 index_min = np.argmin([loss1, loss2, loss3, loss4])
-                print("    For step {} in dataloader {}, minimum loss is given by path {}.".format(step, ind, index_min))
+
+                path_chosen[index_min] += 1
+                # print("    For step {} in dataloader {}, minimum loss is given by path {}.".format(step, ind, index_min))
                 loss = min(loss1, loss2, loss3, loss4)
                 logits = logits1
                 labels = labels1
@@ -2384,6 +2388,11 @@ class Trainer:
 
                     # Set back to None to begin a new accumulation
                     losses_host, preds_host, labels_host = None, None, None
+            print("    For domain {}, path 0 was chosen {} times.".format(ind, path_chosen[0]))
+            print("    For domain {}, path 1 was chosen {} times.".format(ind, path_chosen[1]))
+            print("    For domain {}, path 2 was chosen {} times.".format(ind, path_chosen[2]))
+            print("    For domain {}, path 3 was chosen {} times.".format(ind, path_chosen[3]))
+
             # print(len(losses))
             if self.args.past_index and hasattr(self, "_past"):
                 # Clean the state at the end of the evaluation loop
