@@ -476,8 +476,9 @@ def main():
                 )
     if config.vocab_overlap:
         vocab = {}
-        for domain in domains:
+        for i, domain in enumerate(domains):
             vocab[domain] = set()
+            # for row in range(min(data_args.max_train_samples, len(lm_datasets[domain]["train"].data.columns[1]))):
             for row in range(len(lm_datasets[domain]['train'].data.columns[1])):
                 for token_id in lm_datasets[domain]['train'].data.columns[1][row]:
                     if token_id not in vocab:
