@@ -322,13 +322,14 @@ class GPT2Block(nn.Module):
         self.attn = GPT2Attention(config)
         self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         self.use_adapters = config.use_adapters
+        self.use_tree_structure = config.use_tree_structure
         if config.add_cross_attention:
             self.crossattention = GPT2Attention(config, is_cross_attention=True)
             self.ln_cross_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
         self.mlp = GPT2MLP(inner_dim, config)
-
-        self.domain_dict = config.domain_dict
+        if self.use_tree_structure:
+            self.domain_dict = config.domain_dict
         self.num_domains = config.num_domains
         self.use_tree_structure = config.use_tree_structure
         adapter_list = []
@@ -342,9 +343,10 @@ class GPT2Block(nn.Module):
                     adapter_list.append(Adapter(config))
 
             self.adapter_module = nn.ModuleList(adapter_list)
-
-            logger.info(f"I was given a tree with {len(self.domain_dict.keys())} nodes and I initialized {len(adapter_list)} adapters!")
-
+            if self.use_tree_structure:
+                logger.warning(f"I was given a tree with {len(self.domain_dict.keys())} nodes and I initialized {len(adapter_list)} adapters!")
+            else:
+                logger.warning(f"I was NOT given a tree and I initialized {len(adapter_list)} adapter(s)!")
     def forward(
         self,
         hidden_states,

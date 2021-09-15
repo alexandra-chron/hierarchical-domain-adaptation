@@ -277,15 +277,21 @@ def main():
     config.vocab_overlap = data_args.vocab_overlap
 
     if config.num_domains:
-        with open('domain_dict.json', 'r') as f:
-            config.domain_dict = {int(k): v for (k, v) in json.load(f).items()}
+        if config.use_tree_structure:
+            with open('domain_dict.json', 'r') as f:
+                config.domain_dict = {int(k): v for (k, v) in json.load(f).items()}
         with open('domain_names.json', 'r') as f:
             config.domains = []
             for (k, v) in json.load(f).items():
                 config.domains.append(v)
-        assert config.num_domains == len(config.domains), "Make sure you have provided a domain_names.json that" \
+        if config.use_tree_structure:
+            assert config.num_domains == len(config.domains), "Make sure you have provided a domain_names.json that" \
                                                           " lists ALL domains (number" \
                                                           " of domains specified with the num_domains flag)!"
+        else:
+            if len(config.domains) > config.num_domains:
+                print("There is {} set of adapters for {} domains!!!! We will train multi-domain adapters!".format(config.num_domains,
+                                                                                                                   len(config.domains)))
     path = "/".join(data_args.train_file.split("/")[:2]) + "/"
 
     # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
