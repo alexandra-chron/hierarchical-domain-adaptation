@@ -15,7 +15,7 @@ def get_parser():
     parser.add_argument("--data_dir", type=str, default="/home/achron/hierarchical-domain-adaptation/"
                                                         "corpora/yelp/yelp_academic_dataset_review.json",
                         help="Path where data is stored")
-    parser.add_argument("--dump_path", typesgas=str, default="./", help="Experiment dump path")
+    parser.add_argument("--dump_path", types=str, default="./", help="Experiment dump path")
     return parser
 
 
