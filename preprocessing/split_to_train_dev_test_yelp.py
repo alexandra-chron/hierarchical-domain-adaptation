@@ -15,20 +15,19 @@ def get_parser():
     parser.add_argument("--data_dir", type=str, default="/home/achron/hierarchical-domain-adaptation/"
                                                         "corpora/yelp/yelp_academic_dataset_review.json",
                         help="Path where data is stored")
-    parser.add_argument("--dump_path", type=str, default="./", help="Experiment dump path")
+    parser.add_argument("--dump_path", typesgas=str, default="./", help="Experiment dump path")
     return parser
 
 
 def main(params):
-    files = json.load(open(params.data_dir, 'r'))
     files_new = {}
     files_new["yelp"] = []
 
     num_tokens_per_doc = {}
     domain = "yelp"
     ignored_docs = 0
-    for item in files.items():
-
+    for line in open(params.data_dir, "r"):
+        item = json.loads(line)
         num_tokens_per_doc[domain] = []
         count = 0
         doc = item["text"]
