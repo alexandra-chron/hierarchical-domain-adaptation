@@ -2111,6 +2111,13 @@ class Trainer:
             logger.info(f"Deleting older checkpoint [{checkpoint}] due to args.save_total_limit")
             shutil.rmtree(checkpoint)
 
+    def only_get_dataloader(
+            self,
+            eval_datasets: Optional[Dataset] = None,
+    ):
+        eval_dataloaders = self.get_eval_dataloader(eval_datasets)
+        return eval_dataloaders
+
     def evaluate(
         self,
         eval_datasets: Optional[Dataset] = None,
@@ -2333,6 +2340,9 @@ class Trainer:
                 observed_batch_size = find_batch_size(inputs)
                 if observed_batch_size is not None:
                     observed_num_examples += observed_batch_size
+                inputs['attention_mask'] = inputs['attention_mask'].cuda()
+                inputs['input_ids'] = inputs['input_ids'].cuda()
+                inputs['labels'] = inputs['labels'].cuda()
 
                 # Prediction step
                 loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
