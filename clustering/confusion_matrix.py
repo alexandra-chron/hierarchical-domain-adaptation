@@ -10,7 +10,7 @@ from sklearn.utils.multiclass import unique_labels
 def plot_confusion_matrix(y_true, y_pred, classes,
                           normalize=False,
                           title=None,
-                          cmap=plt.cm.Blues):
+                          cmap=plt.cm.Blues, max_size=None):
     """
     This function prints and plots the confusion matrix.
     Normalization can be applied by setting `normalize=True`.
@@ -32,7 +32,15 @@ def plot_confusion_matrix(y_true, y_pred, classes,
     else:
         print('Confusion matrix, without normalization')
 
+    def myfunction(x):
+        return(100 * x/max_size)
+
+    domain_x_percentage_in_each_cluster = np.apply_along_axis(myfunction, axis=1, arr=cm)
     print(cm)
+
+    print("Each cluster has this many sequences:")
+    num_sequences_per_cluster = np.sum(cm, axis=0)
+    print(num_sequences_per_cluster)
     classes = [c.replace('_dev', '') for c in classes]
     fig, ax = plt.subplots()
     im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
@@ -40,12 +48,12 @@ def plot_confusion_matrix(y_true, y_pred, classes,
     ax.set(xticks=np.arange(cm.shape[1]),
            yticks=np.arange(cm.shape[0]),
            # And label them with the respective list entries
-           xticklabels=classes, yticklabels=classes,
+           xticklabels=[i for i in range(len(classes))], yticklabels=classes,
            ylabel='True label',
            xlabel='Predicted label')
 
     # Rotate the tick labels and set their alignment.
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
+    plt.setp(ax.get_xticklabels(), rotation=0, ha="right",
              rotation_mode="anchor", fontsize=4)
     plt.setp(ax.get_yticklabels(), fontsize=4)
     # Loop over data dimensions and create text annotations.
@@ -58,4 +66,4 @@ def plot_confusion_matrix(y_true, y_pred, classes,
                     color="white" if cm[i, j] > thresh else "black", size=4)
     fig.tight_layout()
     fig.savefig("./main_confusion.pdf", bbox_inches='tight')
-    return ax
+    return ax, num_sequences_per_cluster, domain_x_percentage_in_each_cluster

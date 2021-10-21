@@ -1,3 +1,4 @@
+import itertools
 from collections import defaultdict
 
 import matplotlib as mpl
@@ -169,7 +170,7 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
         y_test_pred = estimator.predict(X_test)
 
         # map clusters to classes by majority of true class in cluster
-        clusters_to_classes = map_clusters_to_classes_by_majority(y_train, y_train_pred)
+        clusters_to_classes, classes_to_clusters = map_clusters_to_classes_by_majority(y_train, y_train_pred)
 
         # plot confusion matrix, error analysis
         if confusion:
@@ -188,7 +189,11 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
             subs_prons_overall = 0
             sent_lens = []
             y_pred_by_majority = np.array([clusters_to_classes[pred] for pred in y_train_pred])
-            plot_confusion_matrix(y_train, y_pred_by_majority, class_names, title=header)
+            _, num_sequences_per_cluster, domain_x_percentage_in_each_cluster = plot_confusion_matrix(y_train,
+                                                                                                      y_pred_by_majority,
+                                                                                                      class_names,
+                                                                                                      title=header,
+                                                                                                      max_size=examples_per_class)
 
         # Calculate the Purity metric
         count = 0
@@ -226,12 +231,21 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     # One cluster per domain
 
     g_means, g_covariances = [], []
-
+    ignored_clusters = []
     for n in range(n_clusters):
+        if num_sequences_per_cluster[n] == 0:
+            print("Ignoring cluster {} as it is empty.".format(n))
+            ignored_clusters.append(n)
+            continue
         covariances = estimator.covariances_[n][:2, :2]
         means = np.array(estimator.means_[n, :2])
         g_means.append(means.transpose())
         g_covariances.append(covariances)
+    print(class_names)
+    print(domain_x_percentage_in_each_cluster)
+    # for i, row in enumerate(domain_x_percentage_in_each_cluster):
+    #     for j, item in enumerate(row):
+    #         print("{} % of domain {} belongs to cluster {}".format(item, class_names[i], j))
 
     kl_div_average_list = []
 
@@ -253,17 +267,36 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
 
     labels = []
     for n in sorted(list(clusters_to_classes.keys())):
+        if n in ignored_clusters:
+            continue
         labels.append(n)
-        print("cluster {}, assigned domain {}".format(n,class_names[clusters_to_classes[n]]))
+        print("cluster {} mostly has data from internet domain {}".format(n,
+                                                                          class_names[clusters_to_classes[n]]))
 
     main_plot = plt.figure(figsize=(8, 8))
     plt.subplots_adjust(bottom=0.1, top=0.95, hspace=.15, wspace=.05, left=.09, right=.99)
     agg = AgglomerativeClustering(distance_threshold=0, linkage="average", affinity='precomputed', n_clusters=None)
     agg = agg.fit(kl_div_array)
+
+    ii = itertools.count(kl_div_array.shape[0])
+    agg_clusters = [{'node_id': next(ii), 'left': x[0], 'right': x[1]} for x in agg.children_]
+
+    import copy
+    n_points = kl_div_array.shape[0]
+    members = {i: [i] for i in range(n_points)}
+    for cluster in agg_clusters:
+        node_id = cluster["node_id"]
+        members[node_id] = copy.deepcopy(members[cluster["left"]])
+        members[node_id].extend(copy.deepcopy(members[cluster["right"]]))
+
+    on_split = {c["node_id"]: [c["left"], c["right"]] for c in agg_clusters}
+    up_merge = {c["left"]: c["node_id"] for c in agg_clusters}
+    up_merge.update({c["right"] : c["node_id"] for c in agg_clusters})
+
     plt.title('Hierarchical Clustering Dendrogram')
     plot_dendrogram(agg,  truncate_mode='level', labels=labels,
-                    leaf_font_size=12, leaf_rotation=12)
-    plt.xlabel("Number of points in node (or index of point if no parenthesis).")
+                    leaf_font_size=12, leaf_rotation=0)
+    # plt.xlabel("Number of points in node (or index of point if no parenthesis).")
 
     main_plot.savefig("./main_dendrogram.pdf", bbox_inches='tight')
 

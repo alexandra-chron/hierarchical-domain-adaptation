@@ -53,6 +53,7 @@ def map_clusters_to_classes_by_majority(y_train, y_train_pred):
     Maps clusters to classes by majority to compute the Purity metric.
     """
     cluster_to_class = {}
+    class_to_cluster = {}
     for cluster in np.unique(y_train_pred):
         # run on indices where this is the cluster
         original_classes = []
@@ -61,7 +62,8 @@ def map_clusters_to_classes_by_majority(y_train, y_train_pred):
                 original_classes.append(y_train[i])
         # take majority
         cluster_to_class[cluster] = max(set(original_classes), key=original_classes.count)
-    return cluster_to_class
+        class_to_cluster[max(set(original_classes), key=original_classes.count)] = cluster
+    return cluster_to_class, class_to_cluster
 
 
 def fit_gmm(name_to_embeddings, class_names, first_principal_component_shown=0,

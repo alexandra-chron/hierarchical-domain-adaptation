@@ -36,7 +36,7 @@ import torch
 import datasets
 import json
 from datasets import load_dataset
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "6"
 
 import transformers
 from transformers import (
@@ -480,7 +480,7 @@ def main():
             for i in range(len(eval_datasets)):
                 eval_datasets[i] = eval_datasets[i].select(range(data_args.max_eval_samples))
         for i, domain in enumerate(domains):
-            logger.info("Eval dataset of domain {} length: {} rows.".format(domain, len(eval_datasets[i])))
+            logger.info("Train dataset of domain {} length: {} rows.".format(domain, len(eval_datasets[i])))
 
     # Initialize our Trainer
     trainer = Trainer(
