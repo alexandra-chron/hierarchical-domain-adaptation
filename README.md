@@ -17,9 +17,9 @@ pip install -r ./requirements.txt
 ```
 
 
-Before you run the following commands, make sure to set the YOUR_EXPERIMENT_NAME to the name you prefer. This is the directory where results will be stored.
+Before you run the following commands, make sure to set YOUR_EXPERIMENT_NAME, used to set the path below. This is the directory where results will be stored.
 
-The DATA is already preprocessed and stored in /home/achron/hierarchical-domain-adaptation/corpora/cached_datasets (in vm-4) for example
+The DATA is already preprocessed and stored in ```/home/achron/hierarchical-domain-adaptation/corpora/cached_datasets``` (in vm-4 for example)
 
 The domains used are defined in ```domain_names.json```. Their number should match the --num_domains value.
 
