@@ -1,6 +1,5 @@
 # Hierarchical Domain Adaptation (with Adapters) 
 
-Hierarchical model training with 39 domains (specified in domain_names.json)
 
 Create a conda environment:
 
