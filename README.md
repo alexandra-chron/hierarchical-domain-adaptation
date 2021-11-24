@@ -6,7 +6,8 @@ Create a conda environment:
 ```
 conda create -n hierarchical python=3.9.5
 conda activate hierarchical
-conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch
+conda install pytorch torchvision torchaudio cudatoolkit=11.0 -c pytorch
+
 ```
 
 Install the rest of the requirements:
