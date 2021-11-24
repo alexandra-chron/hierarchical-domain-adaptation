@@ -10,6 +10,12 @@ conda activate hierarchical
 conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch
 ```
 
+Install the rest of the requirements:
+
+```
+pip install -r ./requirements.txt
+```
+
 
 Before you run the following commands, make sure to set the YOUR_EXPERIMENT_NAME to the name you prefer. This is the directory where results will be stored.
 
