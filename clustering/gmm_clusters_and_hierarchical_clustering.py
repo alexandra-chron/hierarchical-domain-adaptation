@@ -197,6 +197,7 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
 
         # Calculate the Purity metric
         count = 0
+        np.save('./internet_domain_percentage_in_each_cluster.npy', domain_x_percentage_in_each_cluster)
         for i, pred in enumerate(y_train_pred):
             # print("Sample {} from internet domain {} belongs to cluster {}.".format(i,
             #                                                                         pca_labels[i], clusters_to_classes[pred]))
@@ -232,15 +233,17 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
 
     g_means, g_covariances = [], []
     ignored_clusters = []
+    nonempty_clusters = []
     for n in range(n_clusters):
         if num_sequences_per_cluster[n] == 0:
             print("Ignoring cluster {} as it is empty.".format(n))
             ignored_clusters.append(n)
-            continue
-        covariances = estimator.covariances_[n][:2, :2]
-        means = np.array(estimator.means_[n, :2])
-        g_means.append(means.transpose())
-        g_covariances.append(covariances)
+        else:
+            nonempty_clusters.append(n)
+            covariances = estimator.covariances_[n][:2, :2]
+            means = np.array(estimator.means_[n, :2])
+            g_means.append(means.transpose())
+            g_covariances.append(covariances)
     print(class_names)
     print(domain_x_percentage_in_each_cluster)
     # for i, row in enumerate(domain_x_percentage_in_each_cluster):
@@ -249,27 +252,29 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
 
     kl_div_average_list = []
 
-    for n in range(n_clusters):
+    for n in range(len(nonempty_clusters)):
         kl_div_nm = []
         kl_div_mn = []
         kl_div_average_per_cluster = []
-        for m in range(n_clusters):
+        for m in range(len(nonempty_clusters)):
             if n != m:
                 kl_div_nm.append((kl_mvn(g_means[n], g_covariances[n], g_means[m], g_covariances[m])))
                 kl_div_mn.append((kl_mvn(g_means[m], g_covariances[m], g_means[n], g_covariances[n])))
             elif n == m:
                 kl_div_nm.append(0)
                 kl_div_mn.append(0)
-        for i in range(n_clusters):
+        for i in range(len(nonempty_clusters)):
             kl_div_average_per_cluster.append((kl_div_nm[i] + kl_div_mn[i])/2)
         kl_div_average_list.append(kl_div_average_per_cluster)
     kl_div_array = np.array(kl_div_average_list)
 
     labels = []
+    ind = 0 
     for n in sorted(list(clusters_to_classes.keys())):
         if n in ignored_clusters:
             continue
-        labels.append(n)
+        labels.append(ind)
+        ind+=1
         print("cluster {} mostly has data from internet domain {}".format(n,
                                                                           class_names[clusters_to_classes[n]]))
 
@@ -292,7 +297,20 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     on_split = {c["node_id"]: [c["left"], c["right"]] for c in agg_clusters}
     up_merge = {c["left"]: c["node_id"] for c in agg_clusters}
     up_merge.update({c["right"] : c["node_id"] for c in agg_clusters})
-
+    #print(up_merge)
+    #final = {}
+    for key, value in up_merge.items():
+        print(" '{}': {},".format(key, value))
+    #    if isinstance(up_merge[key], np.integer):
+    #        final[str(key)] = int(up_merge[key])
+    #    elif isinstance(up_merge[key], np.floating):
+    #        final[str(key)] = float(up_merge[key])
+    #    elif isinstance(up_merge[key], np.ndarray):
+    #        final[str(key)] = up_merge[key].tolist()
+            
+    import json
+    
+    #json.dump(final, open("./domain_dict.json", "w"))
     plt.title('Hierarchical Clustering Dendrogram')
     plot_dendrogram(agg,  truncate_mode='level', labels=labels,
                     leaf_font_size=12, leaf_rotation=0)

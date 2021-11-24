@@ -27,7 +27,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
-
+import numpy as np
 import datasets
 import json
 from datasets import load_dataset
@@ -161,6 +161,12 @@ class DataTrainingArguments:
             "help": "Are we using adapters"
         },
     )
+    percentage_of_domain_in_cluster: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Do you provide a file that specifies to what extent a dataset belongs to some clusters"
+        },
+    )
     num_domains: Optional[int] = field(
         default=None,
         metadata={
@@ -278,11 +284,19 @@ def main():
     config.adapter_size = data_args.adapter_size
     config.use_tree_structure = data_args.use_tree_structure
     config.vocab_overlap = data_args.vocab_overlap
+    config.percentage_of_domain_in_cluster = data_args.percentage_of_domain_in_cluster
 
+    if config.percentage_of_domain_in_cluster is not None:
+        temp = np.load('internet_domain_percentage_in_each_cluster.npy', 'r')
+        idx = np.argwhere(np.all(temp[..., :] == 0, axis=0))
+        non_zero_columns = np.delete(temp, idx, axis=1)
+        config.percentage_of_domain_in_cluster = non_zero_columns.tolist()
+        
     if config.num_domains:
         if config.use_tree_structure:
             with open('domain_dict.json', 'r') as f:
-                config.domain_dict = {int(k): v for (k, v) in json.load(f).items()}
+                temp = {int(k): v for (k, v) in json.load(f).items()}
+                config.domain_dict = {k: v for k, v in sorted(temp.items(), key=lambda item: item[0])}
         with open('domain_names.json', 'r') as f:
             config.domains = []
             for (k, v) in json.load(f).items():
@@ -306,51 +320,60 @@ def main():
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
-
-    if data_args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset(
-            data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
-        )
-        if "validation" not in raw_datasets.keys():
-            raw_datasets["validation"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-            )
-            raw_datasets["train"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-            )
+    domain = config.domains[0]
+    split = "train"
+    if os.path.isdir("./corpora/cached_datasets/{}_{}".format(domain, split)):
+        saved_in_disk = True
     else:
-        domains = config.domains
-        data_files = {}
-        for domain in domains:
-            data_files[domain] = {}
-            if training_args.do_train:
-                for split in ["train", "valid"]:
-                    if split == "valid": temp_split = "val"
-                    else: temp_split = "train"
-                    data_files[domain][split] = path + domain + "." + temp_split + ".json"
-            else:
-                split = "valid"
-                temp_split = "val"
-                data_files[domain][split] = path + domain + "." + temp_split + ".json"
+        saved_in_disk = False
 
-        raw_datasets = {}
-        for domain in domains:
-            raw_datasets[domain] = {}
-        for domain in domains:
-            if training_args.do_train:
-                for split in ["train", "valid"]:
-                    raw_datasets[domain][split] = load_dataset("text", data_files={split: data_files[domain][split]},
-                                                               split=split, cache_dir=model_args.cache_dir)
-            else:
-                raw_datasets[domain]["valid"] = load_dataset("text", data_files={"valid": data_files[domain]["valid"]},
-                                                           split="valid", cache_dir=model_args.cache_dir)
+    domains = config.domains
+    if not saved_in_disk:
+
+        if data_args.dataset_name is not None:
+            # Downloading and loading a dataset from the hub.
+            raw_datasets = load_dataset(
+                data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
+            )
+            if "validation" not in raw_datasets.keys():
+                raw_datasets["validation"] = load_dataset(
+                    data_args.dataset_name,
+                    data_args.dataset_config_name,
+                    split=f"train[:{data_args.validation_split_percentage}%]",
+                    cache_dir=model_args.cache_dir,
+                )
+                raw_datasets["train"] = load_dataset(
+                    data_args.dataset_name,
+                    data_args.dataset_config_name,
+                    split=f"train[{data_args.validation_split_percentage}%:]",
+                    cache_dir=model_args.cache_dir,
+                )
+        else:
+            domains = config.domains
+            data_files = {}
+            for domain in domains:
+                data_files[domain] = {}
+                if training_args.do_train:
+                    for split in ["train", "valid"]:
+                        if split == "valid": temp_split = "val"
+                        else: temp_split = "train"
+                        data_files[domain][split] = path + domain + "." + temp_split + ".json"
+                else:
+                    split = "valid"
+                    temp_split = "val"
+                    data_files[domain][split] = path + domain + "." + temp_split + ".json"
+
+            raw_datasets = {}
+            for domain in domains:
+                raw_datasets[domain] = {}
+            for domain in domains:
+                if training_args.do_train:
+                    for split in ["train", "valid"]:
+                        raw_datasets[domain][split] = load_dataset("text", data_files={split: data_files[domain][split]},
+                                                                   split=split, cache_dir=model_args.cache_dir)
+                else:
+                    raw_datasets[domain]["valid"] = load_dataset("text", data_files={"valid": data_files[domain]["valid"]},
+                                                               split="valid", cache_dir=model_args.cache_dir)
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -407,17 +430,6 @@ def main():
                                                sum([p.numel() for p in model.parameters() if
                                                     p.requires_grad])))
 
-    # Preprocessing the datasets.
-    # First we tokenize all the texts.
-    if training_args.do_train:
-        column_names = raw_datasets[domains[0]]["train"].column_names
-    else:
-        column_names = raw_datasets[domains[0]]["valid"].column_names
-    text_column_name = "text" if "text" in column_names else column_names[0]
-
-    # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
-    tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
-
     def tokenize_function(examples):
         with CaptureLogger(tok_logger) as cl:
             output = tokenizer(examples[text_column_name])
@@ -428,12 +440,35 @@ def main():
             )
         return output
 
-    with training_args.main_process_first(desc="dataset map tokenization"):
-        tokenized_datasets = {}
-        for domain in domains:
-            tokenized_datasets[domain] = {}
-            if training_args.do_train:
-                for split in ["train", "valid"]:
+    if not saved_in_disk:
+        # Preprocessing the datasets.
+        # First we tokenize all the texts.
+
+        if training_args.do_train:
+            column_names = raw_datasets[domains[0]]["train"].column_names
+        else:
+            column_names = raw_datasets[domains[0]]["valid"].column_names
+        text_column_name = "text" if "text" in column_names else column_names[0]
+
+        # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
+        tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
+
+        with training_args.main_process_first(desc="dataset map tokenization"):
+            tokenized_datasets = {}
+            for domain in domains:
+                tokenized_datasets[domain] = {}
+                if training_args.do_train:
+                    for split in ["train", "valid"]:
+                        tokenized_datasets[domain][split] = raw_datasets[domain][split].map(
+                            tokenize_function,
+                            batched=True,
+                            num_proc=data_args.preprocessing_num_workers,
+                            remove_columns=column_names,
+                            load_from_cache_file=not data_args.overwrite_cache,
+                            desc="Running tokenizer on dataset",
+                        )
+                else:
+                    split = "valid"
                     tokenized_datasets[domain][split] = raw_datasets[domain][split].map(
                         tokenize_function,
                         batched=True,
@@ -442,16 +477,6 @@ def main():
                         load_from_cache_file=not data_args.overwrite_cache,
                         desc="Running tokenizer on dataset",
                     )
-            else:
-                split = "valid"
-                tokenized_datasets[domain][split] = raw_datasets[domain][split].map(
-                    tokenize_function,
-                    batched=True,
-                    num_proc=data_args.preprocessing_num_workers,
-                    remove_columns=column_names,
-                    load_from_cache_file=not data_args.overwrite_cache,
-                    desc="Running tokenizer on dataset",
-                )
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -492,11 +517,25 @@ def main():
     #
     # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
     # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
-    lm_datasets = {}
-    for domain in domains:
-        lm_datasets[domain] = {}
-        if training_args.do_train:
-            for split in ["train", "valid"]:
+
+    if not saved_in_disk:
+        lm_datasets = {}
+        for domain in domains:
+            lm_datasets[domain] = {}
+            if training_args.do_train:
+                for split in ["train", "valid"]:
+                    with training_args.main_process_first(desc="grouping texts together"):
+                        lm_datasets[domain][split] = tokenized_datasets[domain][split].map(
+                            group_texts,
+                            batched=True,
+                            num_proc=data_args.preprocessing_num_workers,
+                            load_from_cache_file=not data_args.overwrite_cache,
+                            desc=f"Grouping texts in chunks of {block_size}",
+                        )
+                    lm_datasets[domain][split].save_to_disk("./corpora/cached_datasets/{}_{}".format(domain, split))
+
+            else:
+                split = "valid"
                 with training_args.main_process_first(desc="grouping texts together"):
                     lm_datasets[domain][split] = tokenized_datasets[domain][split].map(
                         group_texts,
@@ -505,16 +544,12 @@ def main():
                         load_from_cache_file=not data_args.overwrite_cache,
                         desc=f"Grouping texts in chunks of {block_size}",
                     )
-        else:
-            split = "valid"
-            with training_args.main_process_first(desc="grouping texts together"):
-                lm_datasets[domain][split] = tokenized_datasets[domain][split].map(
-                    group_texts,
-                    batched=True,
-                    num_proc=data_args.preprocessing_num_workers,
-                    load_from_cache_file=not data_args.overwrite_cache,
-                    desc=f"Grouping texts in chunks of {block_size}",
-                )
+    else:
+        lm_datasets = {}
+        for domain in domains:
+            lm_datasets[domain] = {}
+            for split in ["train", "valid"]:
+                lm_datasets[domain][split] = datasets.load_from_disk("./corpora/cached_datasets/{}_{}".format(domain, split))
     if config.vocab_overlap:
         vocab = {}
         for i, domain in enumerate(domains):
@@ -535,8 +570,8 @@ def main():
     eval_datasets = []
     if training_args.do_train:
         for domain in domains:
-            if "train" not in tokenized_datasets[domain]:
-                raise ValueError("--do_train requires a train dataset")
+            # if "train" not in tokenized_datasets[domain]:
+            #     raise ValueError("--do_train requires a train dataset")
             train_datasets.append(lm_datasets[domain]["train"])
 
         if data_args.max_train_samples is not None:
@@ -552,8 +587,8 @@ def main():
 
     if training_args.do_eval:
         for domain in domains:
-            if "valid" not in tokenized_datasets[domain]:
-                raise ValueError("--do_eval requires a validation dataset")
+            # if "valid" not in tokenized_datasets[domain]:
+            #     raise ValueError("--do_eval requires a validation dataset")
             eval_datasets.append(lm_datasets[domain]["valid"])
 
         if data_args.max_eval_samples is not None:

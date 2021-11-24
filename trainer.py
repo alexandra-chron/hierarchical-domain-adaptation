@@ -1120,8 +1120,14 @@ class Trainer:
         total_train_batch_size = args.train_batch_size * args.gradient_accumulation_steps * args.world_size
         if train_dataset_is_sized:
             dataloader_len = 0
+            maximum = 0
             for dataloader in train_dataloaders:
-                dataloader_len += len(dataloader)
+                dataloader_len = len(dataloader)
+                if dataloader_len > maximum:
+                    maximum = dataloader_len
+                # dataloader_len += len(dataloader)
+            dataloader_len = maximum
+
             num_update_steps_per_epoch = dataloader_len // args.gradient_accumulation_steps
             num_update_steps_per_epoch = max(num_update_steps_per_epoch, 1)
             if args.max_steps > 0:
@@ -1297,34 +1303,47 @@ class Trainer:
                 for ind, dataloader in enumerate(train_dataloaders):
                     dl_len.append(len(dataloader))
                 sorted_ind = np.argsort(dl_len)
-                if len(dl_len) == 4 and\
-                        len(train_dataloaders[sorted_ind[3]]) > len(train_dataloaders[sorted_ind[2]]):
-                    epoch_iterator = zip(cycle(train_dataloaders[sorted_ind[0]]),
-                                         cycle(train_dataloaders[sorted_ind[1]]),
-                                         cycle(train_dataloaders[sorted_ind[2]]),
-                                         train_dataloaders[sorted_ind[3]])
-                elif len(dl_len) == 1:
-                    epoch_iterator = zip(train_dataloaders[0])
-                else:
-                    epoch_iterator = zip(train_dataloaders[sorted_ind[0]],
-                                         train_dataloaders[sorted_ind[1]],
-                                         train_dataloaders[sorted_ind[2]],
-                                         train_dataloaders[sorted_ind[3]])
+                iterations = len(train_dataloaders[sorted_ind[-1]])
+
                 if epoch == 0:
                     logger.warning("The size of my largest dataset is {}".format(dl_len[sorted_ind[-1]]))
-                    logger.warning("I will be sampling a batch of each dataset at every step -- {} times in total (repeating "
-                                "the samples of the lower-resource datasets)".format(len(list(epoch_iterator))))
-                    logger.warning("If you multiply that by the batch size: {}, you should be getting the "
-                                "size of the biggest dataset.".format(train_dataloaders[0].batch_size))
+                    # logger.warning("I will be sampling a batch of each dataset at every step -- {} times in total (repeating "
+                    #             "the samples of the lower-resource datasets)".format(len(list(epoch_iterator))))
+                    # logger.warning("If you multiply that by the batch size: {}, you should be getting the "
+                    #             "size of the biggest dataset.".format(train_dataloaders[0].batch_size))
             # Reset the past mems state at the beginning of each epoch if necessary.
             if args.past_index >= 0:
                 self._past = None
-            epoch_iterator = tqdm(epoch_iterator, total=dl_len[sorted_ind[-1]], desc="Iteration",
-                                      disable=args.local_rank not in [-1, 0])
+            # epoch_iterator = tqdm(epoch_iterator, total=dl_len[sorted_ind[-1]], desc="Iteration",
+            #                           disable=args.local_rank not in [-1, 0])
             steps_in_epoch = (
-                len(epoch_iterator) if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
+                iterations if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
             )
+
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
+            dataloader_iterator = []
+            for i in range(len(train_dataloaders)):
+                # initially get iterators for all dataloaders
+                dataloader_iterator.append(iter(train_dataloaders[i]))
+            # the last of the sorted indices is the one that points to the largest dataset
+            logger.warning("The largest dataset has {} rows.".format(iterations))
+
+            tqdm_iterations = tqdm(train_dataloaders[sorted_ind[-1]], total=iterations, desc="Iteration")
+            for step, _ in enumerate(tqdm_iterations):
+                multi_batch = []
+                # j runs in the datasets
+                # for each dataset
+                for i in range(len(train_dataloaders)):
+                    try:
+                        # sample a batch
+                        batch = next(dataloader_iterator[i])
+                        # append to the multi_batch
+                    except StopIteration:
+                        # if this dataset is over, restart running through it
+                        dataloader_iterator[i] = iter(train_dataloaders[i])
+                        batch = next(dataloader_iterator[i])
+                    multi_batch.append(batch)
+                # now we have a multi_batch
 
             # multi_batch: the concatenation of batches from each of all X domains
             # compared to single-task training, I have an extra for loop here that iterates over the domains
@@ -1334,13 +1353,10 @@ class Trainer:
 
             # currently gradient accumulation = len(domains)
 
-            for step, multi_batch in enumerate(epoch_iterator):
+            # for step, multi_batch in enumerate(epoch_iterator):
                 # num_tokens_per_domain = batch_size * block_size
                 # num_tokens_per_domain += len(multi_batch[0]['input_ids']) * len(multi_batch[0]['input_ids'][0])
                 # total_num_tokens_per_domain = dl_len[sorted_ind[-1]] *  len(multi_batch[0]['input_ids'][0])
-                # if step % 50 == 0:
-                #     print("\n{}/{} tokens per domain processed "
-                #           "in this epoch.".format(num_tokens_per_domain, total_num_tokens_per_domain))
 
                 sum_losses = torch.tensor(0.0).to(args.device)
 
