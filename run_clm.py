@@ -422,7 +422,10 @@ def main():
         for param in model.named_parameters():
             if "adapter" not in param[0]:
                 param[1].requires_grad = False
-
+        # for param in model.named_parameters():
+        #     if "layer_norm_before_adapter" in param[0]:
+        #         param[1].requires_grad = True
+        #         logger.warning(param[0])
     # logger.info(model)
     logger.info(
         "Number of parameters = {}, "

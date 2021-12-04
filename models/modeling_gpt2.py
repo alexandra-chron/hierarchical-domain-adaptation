@@ -68,16 +68,16 @@ GPT2_PRETRAINED_MODEL_ARCHIVE_LIST = [
 class Adapter(nn.Module):
     def __init__(self, config, adapter_size=None):
         super(Adapter, self).__init__()
-        self.layer_norm = LayerNorm(config.hidden_size)
+        # self.layer_norm = LayerNorm(config.hidden_size)
 
         self.down_project = nn.Linear(config.hidden_size, config.adapter_size)
         self.activation = nn.ReLU()
         self.up_project = nn.Linear(config.adapter_size, config.hidden_size)
         # self.init_weights(config)
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, layer_norm):
         # [1, 1024] `* [1024, 256] -> 256
-        layer_norm = self.layer_norm(hidden_states)
+        # layer_norm = self.layer_norm(hidden_states)
         down_projected = self.down_project(layer_norm)
         activated = self.activation(down_projected)
         up_projected = self.up_project(activated)
@@ -337,16 +337,10 @@ class GPT2Block(nn.Module):
         adapter_list = []
 
         if self.use_adapters:
+            self.layer_norm_before_adapter = LayerNorm(config.hidden_size)
             if self.use_tree_structure:
-                #dict_ = {9:1, 13:0, 15:2, 37:12, 42:19, 44:40, 41:39,43:20, 46:45, 17:14, 18:7, 22:3, 23:10, 29:8, 30:27, 31:4, 33:24, 34:26, 35:6, 36:28,38:32}
                 for key in self.domain_dict.keys():
-                    #if key in dict_.keys():
-                    #    adapter_list.append(adapter_list[dict_[key]])
-                    #if key not in dict_.keys():
                     adapter_list.append(Adapter(config))
-                #for i, adapter in enumerate(adapter_list):
-                #    if i in dict_.keys():
-                #        adapter = adapter_list[dict_[i]]
             else:
                 for _ in range(self.num_domains):
                     adapter_list.append(Adapter(config))
@@ -356,6 +350,7 @@ class GPT2Block(nn.Module):
                 logger.warning(f"I was given a tree with {len(self.domain_dict.keys())} nodes and I initialized {len(adapter_list)} adapters!")
             else:
                 logger.warning(f"I was NOT given a tree and I initialized {len(adapter_list)} adapter(s)!")
+
     def forward(
         self,
         hidden_states,
@@ -412,7 +407,6 @@ class GPT2Block(nn.Module):
         adapter_outputs = 0
         if self.use_adapters:
             if self.use_tree_structure:
-                #start = time.time()
                 ind = dataset_ind
                 #       7
                 #    5     6
@@ -427,35 +421,24 @@ class GPT2Block(nn.Module):
                 #     if item > 5.0:
                 #         clusters_to_activate.append(i)
                 #         weight_of_cluster_to_activate.append(item)
-                #logger.warning("This is dataset {}".format(ind-1))
                 index_max = np.argmax(row)
                 cluster_to_activate = index_max
-                #logger.warning("Cluster {} was selected".format(cluster_to_activate))
                 # ffhstates_from_all_activated_clusters = []
 
                 # for i, cluster in enumerate(clusters_to_activate):
                 adapters_active = 0
                 index = cluster_to_activate
-                #mid = time.time()
-                    
-                 
+                layer_norm = self.layer_norm_before_adapter(feed_forward_hidden_states)
                 while index != -1:  # while we haven't found the root of the tree
                     adapters_active += 1
-                    adapter_outputs = torch.add(adapter_outputs,self.adapter_module[index](feed_forward_hidden_states))
-                    #feed_forward_hidden_states = self.adapter_module[index](feed_forward_hidden_states)
-                    #logger.warning(adapter_outputs)
+                    adapter_outputs = torch.add(adapter_outputs,
+                                                self.adapter_module[index](hidden_states=feed_forward_hidden_states, layer_norm=layer_norm))
                     index = self.domain_dict[index]
                 # In the above tree, if initial ind==1, it goes like this: 1 - 5 - 7 - 0 (then exits while loop)
-                #after_mid = time.time()
-                feed_forward_hidden_states = torch.div(adapter_outputs,adapters_active)
-                #end = time.time()
-                #logger.warning("The depth of this path is {}".format(adapters_active))
-                #logger.warning(mid-start)
-                #logger.warning(after_mid - mid)
-                #logger.warning(end-after_mid)
+                feed_forward_hidden_states = torch.div(adapter_outputs, adapters_active)
+
                 # * (weight_of_cluster_to_activate[i] / 100)
                 # ffhstates_from_all_activated_clusters.append(feed_forward_hidden_states)
-
                 # ffhstate_final = 0
                 # for ffhstate in ffhstates_from_all_activated_clusters:
                 #     ffhstate_final += ffhstate
@@ -463,8 +446,9 @@ class GPT2Block(nn.Module):
 
             else:
                 # multi-task learning, the hidden_states of all adapters (1 for each domain) are averaged
+                layer_norm = self.layer_norm_before_adapter(feed_forward_hidden_states)
                 for i in range(self.num_domains):
-                    adapter_outputs += self.adapter_module[i](feed_forward_hidden_states)
+                    adapter_outputs += self.adapter_module[i](hidden_states=feed_forward_hidden_states, layer_norm=layer_norm)
                 feed_forward_hidden_states = adapter_outputs / self.num_domains
 
         # residual connection
