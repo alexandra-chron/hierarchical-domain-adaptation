@@ -67,17 +67,19 @@ GPT2_PRETRAINED_MODEL_ARCHIVE_LIST = [
 
 class Adapter(nn.Module):
     def __init__(self, config, adapter_size=None):
-        super(Adapter, self).__init__()
-        # self.layer_norm = LayerNorm(config.hidden_size)
+        super(Adapter, self).__init__() 
+        self.layer_norm = LayerNorm(config.hidden_size)
 
         self.down_project = nn.Linear(config.hidden_size, config.adapter_size)
         self.activation = nn.ReLU()
         self.up_project = nn.Linear(config.adapter_size, config.hidden_size)
         # self.init_weights(config)
+        
+    #    def forward(self, hidden_states, layer_norm):
 
     def forward(self, hidden_states, layer_norm):
         # [1, 1024] `* [1024, 256] -> 256
-        # layer_norm = self.layer_norm(hidden_states)
+        #layer_norm = self.layer_norm(hidden_states)
         down_projected = self.down_project(layer_norm)
         activated = self.activation(down_projected)
         up_projected = self.up_project(activated)
@@ -331,8 +333,13 @@ class GPT2Block(nn.Module):
         if self.use_tree_structure:
             self.domain_dict = config.domain_dict
         self.num_domains = config.num_domains
-        if config.percentage_of_domain_in_cluster is not None:
-            self.percentage_of_domain_in_cluster = config.percentage_of_domain_in_cluster
+        lista = []
+        #if config.percentage_of_domain_in_cluster is not None:
+        #    for i,row in enumerate(config.percentage_of_domain_in_cluster):
+        #        lista.append(np.argmax(row))
+                
+        #    self.percentage_of_domain_in_cluster = lista          
+        self.domain_to_cluster = config.domain_to_cluster
         self.use_tree_structure = config.use_tree_structure
         adapter_list = []
 
@@ -350,7 +357,6 @@ class GPT2Block(nn.Module):
                 logger.warning(f"I was given a tree with {len(self.domain_dict.keys())} nodes and I initialized {len(adapter_list)} adapters!")
             else:
                 logger.warning(f"I was NOT given a tree and I initialized {len(adapter_list)} adapter(s)!")
-
     def forward(
         self,
         hidden_states,
@@ -405,6 +411,7 @@ class GPT2Block(nn.Module):
         feed_forward_hidden_states = self.mlp(hidden_states)
 
         adapter_outputs = 0
+         
         if self.use_adapters:
             if self.use_tree_structure:
                 ind = dataset_ind
@@ -415,34 +422,23 @@ class GPT2Block(nn.Module):
                 # clusters_to_activate = []
                 # weight_of_cluster_to_activate = []
 
+                layer_norm = self.layer_norm_before_adapter(feed_forward_hidden_states)
                 current_domain = ind - 1
-                row = self.percentage_of_domain_in_cluster[current_domain]
-                # for i, item in enumerate(row):
-                #     if item > 5.0:
-                #         clusters_to_activate.append(i)
-                #         weight_of_cluster_to_activate.append(item)
-                index_max = np.argmax(row)
-                cluster_to_activate = index_max
-                # ffhstates_from_all_activated_clusters = []
+                index = self.domain_to_cluster[current_domain]
 
+                 
+                #logger.warning("We are in domain {} we use cluster {}".format(current_domain, index))
                 # for i, cluster in enumerate(clusters_to_activate):
                 adapters_active = 0
-                index = cluster_to_activate
-                layer_norm = self.layer_norm_before_adapter(feed_forward_hidden_states)
+                adapter_outputs = 0 
                 while index != -1:  # while we haven't found the root of the tree
                     adapters_active += 1
-                    adapter_outputs = torch.add(adapter_outputs,
-                                                self.adapter_module[index](hidden_states=feed_forward_hidden_states, layer_norm=layer_norm))
+                    adapter_outputs += self.adapter_module[index](hidden_states=feed_forward_hidden_states, layer_norm=layer_norm)
                     index = self.domain_dict[index]
                 # In the above tree, if initial ind==1, it goes like this: 1 - 5 - 7 - 0 (then exits while loop)
-                feed_forward_hidden_states = torch.div(adapter_outputs, adapters_active)
+                feed_forward_hidden_states = torch.div(adapter_outputs,adapters_active)
 
                 # * (weight_of_cluster_to_activate[i] / 100)
-                # ffhstates_from_all_activated_clusters.append(feed_forward_hidden_states)
-                # ffhstate_final = 0
-                # for ffhstate in ffhstates_from_all_activated_clusters:
-                #     ffhstate_final += ffhstate
-                # feed_forward_hidden_states = ffhstate_final/len(ffhstates_from_all_activated_clusters)
 
             else:
                 # multi-task learning, the hidden_states of all adapters (1 for each domain) are averaged

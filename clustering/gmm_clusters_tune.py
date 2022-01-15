@@ -74,6 +74,11 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     """
     if last_principal_component_shown <= first_principal_component_shown:
         raise Exception('first PCA component must be smaller than the 2nd')
+    
+    name = config.name
+
+    if not os.path.exists(name):
+        os.makedirs(name)
 
     # Compute PCA
     if pca:
@@ -81,92 +86,84 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
         #pca_transform = pca.fit(name_to_embeddings)[:, list(range(first_principal_component_shown, last_principal_component_shown + 1))]
         if not config.find_clusters_for_unseen: 
             pca_fitted = pca.fit(name_to_embeddings)
-            with open('pca.pkl', 'wb') as f:
+            filename = '{}/pca.pkl'.format(name)
+            with open(filename, 'wb') as f:
                 pickle.dump(pca_fitted, f)
                 print("Saved PCA fitted")
         else:
-            with open('pca.pkl', 'rb') as f:
+            with open('{}/pca.pkl'.format(config.trained_gmm_path), 'rb') as f:
                 pca_fitted = pickle.load(f)
                 print("Loaded PCA fitted")
         
-        pca_data = pca_fitted.transform(name_to_embeddings)[:, list(range(first_principal_component_shown, last_principal_component_shown +1))]
-        
-        
+        pca_data = pca_fitted.transform(name_to_embeddings)[:, list(range(first_principal_component_shown, last_principal_component_shown +1))]        
     else:
         pca_data = name_to_embeddings
     
     pca_labels = []
-    print("We have {} classes".format(class_names))
+    #print("We have {} classes".format(class_names))
     for i in range(len(class_names)):
         for j in range(examples_per_class):
             pca_labels.append(i)
     pca_labels = np.array(pca_labels)
-    print(pca_labels)
-    #     print(pca_labels)
+    
     # Do not split the data - train=test=all (unsupervised evaluation)
     train_index = list(range(0, pca_data.shape[0]))
-    test_index = list(range(0, pca_data.shape[0]))
-
+    print(pca_data.shape)
     X_train = pca_data[train_index]
     y_train = pca_labels[train_index]
-    X_test = pca_data[test_index]
-    y_test = pca_labels[test_index]
-
+    
     n_classes = len(np.unique(y_train))
     if clusters > 0:
         n_clusters = clusters
     else:
         n_clusters = n_classes
-    print("Number of classes is {}".format(n_clusters))
+    print("We have {} classes.".format(n_clusters))
 
     # Can try GMMs using different types of covariances, we use full.
-    estimators = {cov_type: GaussianMixture(n_components=n_clusters,
-                                            covariance_type=cov_type, max_iter=150, random_state=0)
-                  for cov_type in ['full']}  # 'spherical', 'diag', 'tied',
-
+    estimators = {'full': GaussianMixture(n_components=n_clusters,
+                                            covariance_type='full', max_iter=150, init_params='kmeans')}
     n_estimators = len(estimators)
 
     # Configure the plot
     if plot:
         main_plot = plt.figure(figsize=(8, 8))
         plt.subplots_adjust(bottom=0.1, top=0.95, hspace=.15, wspace=.05, left=.09, right=.99)
-
+    bic = []
     best_accuracy = 0
     for index, (name, estimator) in enumerate(estimators.items()):
         if config.find_clusters_for_unseen: suffix = 'inference'
         else: suffix = 'training'
-
-        name = "new_clusters_{}_{}examples_per_class_saved_pca_again_{}".format(clusters,examples_per_class, suffix)
-        if not os.path.exists(name):
-            os.makedirs(name)
+        #name = config.name
 
         # train the GMM
         if config.find_clusters_for_unseen:
-            with open('gmm_estimator.pkl', 'rb') as f:
+            with open('{}/gmm_estimator.pkl'.format(config.trained_gmm_path), 'rb') as f:
                 estimator_used = pickle.load(f)
                 print("Loaded trained GMM")
-        
         else:
+            
             estimator_used = estimator.fit(X_train)
-            with open('{}/gmm_estimator.pkl'.format(name), 'wb') as f:
+            with open('{}/gmm_estimator.pkl'.format(config.name), 'wb') as f:
                 pickle.dump(estimator_used, f)
                 print("Saved trained GMM")
+        #bic.append(estimator_used.bic(X_train))
 
+        #print('full', 'spherical', 'diag', 'tied')
+        #print(bic)
+        
         class_names_clean = []
 
         for _name in class_names:
             _name = _name.split("_")
-            # print(_name)
             if len(_name) > 1:
                 class_names_clean.append(_name[1])
             else:
                 class_names_clean.append(_name[0])
-            # print(_name)
 
         # create the plots
         a = []
         if plot:
-            if not config.find_clusters_for_unseen:
+                #if not config.find_clusters_for_unseen:
                 h = plt.subplot(1, 1, 1)
                 # red, green, blue, yellow
                 # Plot the train data with dots
@@ -195,49 +192,16 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
                     elif n < 50:
                         marker = 'D'
                     a.append(plt.scatter(data[:, 0], data[:, 1], s=20, marker=marker, color=colors[ind], alpha=0.3))
-            # class_names = [c.replace('^[0-9]+_', '') for c in class_names]
 
                 plt.legend(a, class_names_clean, loc='lower right', bbox_to_anchor=(1.05, 1.0))
                 plt.tight_layout()
         
         # predict the cluster ids for train
         y_train_pred = estimator_used.predict(X_train)
-        dict_of_assigned_ids = {}
-        for cluster in range(clusters):
-            dict_of_assigned_ids[cluster] = {}
-
-        counter_of_examples_per_class = 0
-        cluster = 0
-        for i in y_train_pred:
-            if i in dict_of_assigned_ids[cluster].keys():
-                dict_of_assigned_ids[cluster][i] += 1
-            else:
-                dict_of_assigned_ids[cluster][i] = 1
-            counter_of_examples_per_class += 1
-            # if we are done with the samples of this internet domain:
-            if counter_of_examples_per_class == examples_per_class:
-                cluster += 1
-                counter_of_examples_per_class = 0
-
-        print("---------")
-        domain = 0
-        for cluster in dict_of_assigned_ids.keys():
-            print(cluster, dict_of_assigned_ids[cluster])
-            temp_dict = dict_of_assigned_ids[cluster]
-            print("Internet domain {} should be assigned to cluster {}.".format(domain, max(temp_dict, key=temp_dict.get)))
-            domain += 1
-        print("---------")
-
-        if config.find_clusters_for_unseen:
-            print("Stopping before KL divergences and hierarchical clusters are computed. ")
-            exit()
-
-        # predict the cluster ids for test
-        y_test_pred = estimator_used.predict(X_test)
+        from collections import Counter
 
         # map clusters to classes by majority of true class in cluster
-        clusters_to_classes, classes_to_clusters = map_clusters_to_classes_by_majority(y_train, y_train_pred)
-        
+        clusters_to_classes, classes_to_clusters, counter_clusters = map_clusters_to_classes_by_majority(y_train, y_train_pred)
         # plot confusion matrix, error analysis
         if confusion:
             y_pred_by_majority = np.array([clusters_to_classes[pred] for pred in y_train_pred])
@@ -247,64 +211,122 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
                                                                                                       title=header,
                                                                                                       max_size=
                                                                                                       examples_per_class,
-                                                                                                      name=name)
-
+                                                                                                      name=config.name)
         # Calculate the Purity metric
         count = 0
-        if not config.find_clusters_for_unseen:
-            np.save('{}/internet_domain_percentage_in_each_cluster.npy'.format(name), domain_x_percentage_in_each_cluster)
+        #if not config.find_clusters_for_unseen:
+        #    np.save('{}/internet_domain_percentage_in_each_cluster.npy'.format(config.name), domain_x_percentage_in_each_cluster)
         
         for i, pred in enumerate(y_train_pred):
             if clusters_to_classes[pred] == y_train[i]:
                 count += 1
         train_accuracy = float(count) / len(y_train_pred) * 100
 
-        correct_count = 0
-        for i, pred in enumerate(y_test_pred):
-            if clusters_to_classes[pred] == y_test[i]:
-                correct_count += 1
-        test_accuracy = float(correct_count) / len(y_test_pred) * 100
-
-        if test_accuracy > best_accuracy:
-            best_accuracy = test_accuracy
-        
         if plot:
             make_ellipses(estimator_used, h, clusters_to_classes, colors)
             plt.xticks(())
             plt.yticks(())
-            leg = plt.legend(scatterpoints=1, loc='best', prop=dict(size=10), bbox_to_anchor=(1, 0.8))
+            leg = plt.legend(scatterpoints=1, loc='best', prop=dict(size=5), bbox_to_anchor=(1, 0.8))
             for lh in leg.legendHandles:
                 lh.set_alpha(1)
-                lh._sizes = [60]
+                lh._sizes = [30]
 
     if plot:
         plt.suptitle(header) 
-        main_plot.savefig("{}/main.pdf".format(name), bbox_inches='tight')
+        main_plot.savefig("{}/main.pdf".format(config.name), bbox_inches='tight')
         plt.show()
 
     # Now let's take the means and covariances of the gmms and cluster them hierarchically
     # One cluster per domain
-    #exit()
+    print("train_acc")
+    print(train_accuracy)
+    #return train_accuracy
     g_means, g_covariances = [], []
     ignored_clusters = []
     nonempty_clusters = []
-    for n in range(n_clusters):
-        if num_sequences_per_cluster[n] == 0:
-            print("Ignoring cluster {} as it is empty.".format(n))
-            ignored_clusters.append(n)
+    for n_cluster in range(n_clusters):
+        #if num_sequences_per_cluster[n_cluster] == 0:
+        if n_cluster not in classes_to_clusters.values():
+            print("Ignoring cluster {} as it is empty.".format(n_cluster))
+            ignored_clusters.append(n_cluster)
         else:
-            nonempty_clusters.append(n)
-            covariances = estimator_used.covariances_[n][:2, :2]
-            means = np.array(estimator_used.means_[n, :2])
+            nonempty_clusters.append(n_cluster)
+            covariances = estimator_used.covariances_[n_cluster][:2, :2]
+            means = np.array(estimator_used.means_[n_cluster, :2])
             g_means.append(means.transpose())
             g_covariances.append(covariances)
-    print(class_names_clean)
-    print(domain_x_percentage_in_each_cluster)
+    match_old_new_clusters = {}
+    cluster_id = 0
+    for i in range(n_clusters):
+        if i not in ignored_clusters:
+            match_old_new_clusters[i] = cluster_id
+            cluster_id += 1
+    print("The old clusters correspond to the new ones as shown in dict (empty clusters deleted): \n {}".format(match_old_new_clusters))
+    #print("---")
+    domains_picked = []
+    for cl in clusters_to_classes:
+        if cl in ignored_clusters:
+            continue
+        domains_picked.append(clusters_to_classes[cl])
+        print("Cluster {} has by majority domain {}".format(cl, clusters_to_classes[cl]))
+    
+    domains_not_picked = []
+    for i in range(n_clusters):
+        if i not in domains_picked:
+            print("Domain {} is not a majority in any cluster".format(i))
+            domains_not_picked.append(i)
 
+    for dom in domains_not_picked:
+        max_samples = 0 
+        for cl, counter_cluster_i in enumerate(counter_clusters):
+            if dom in counter_cluster_i.keys():
+                if counter_cluster_i[dom] > max_samples and cl not in ignored_clusters:
+                    max_samples = counter_cluster_i[dom]
+                    assign_to_cluster = cl
+                    unpicked_dom = dom
+    
+        if max_samples > 0:
+            temp = clusters_to_classes[assign_to_cluster] 
+            clusters_to_classes[assign_to_cluster] = []
+            clusters_to_classes[assign_to_cluster].append(temp)
+            clusters_to_classes[assign_to_cluster].append(unpicked_dom)
+            print(clusters_to_classes[assign_to_cluster])
+            print("Domain {} assigned to (old) cluster {}, it has {} samples that have max prob to go there".format(unpicked_dom,assign_to_cluster, max_samples))
+    
+    clusters_to_classes_new = {}
+    for i in clusters_to_classes.keys():
+        if i not in ignored_clusters:
+            clusters_to_classes_new[i] = clusters_to_classes[i]
+            
+    clusters_to_classes_final_indices = {}
+    for key, value in clusters_to_classes_new.items():
+        key_final = match_old_new_clusters[key]
+        clusters_to_classes_final_indices[key_final] = value
+    
+    classes_to_clusters_final = {}
+
+    print("Cluster to domains final dictionary: {}".format(clusters_to_classes_final_indices))
+    for key, value in clusters_to_classes_final_indices.items():
+        print(value)
+        if isinstance(value, list):
+            print("MPIKA")
+            for val in value:
+                classes_to_clusters_final[str(val)] = key 
+        else:
+            classes_to_clusters_final[str(value)] = key
+    print(classes_to_clusters_final)
+    import json
+    with open('{}/domain_to_cluster.json'.format(config.name), 'w') as f:
+        json.dump(classes_to_clusters_final, f)
+        print("saved domain-to-cluster in domain_to_cluster.json!")
+   #print("-----")
+    #print(counter_clusters)
+
+    #print(sorted(domains_picked))
     kl_div_average_list = []
 
     for n in range(len(nonempty_clusters)):
-        kl_div_nm = []
+        kl_div_nm= []
         kl_div_mn = []
         kl_div_average_per_cluster = []
         for m in range(len(nonempty_clusters)):
@@ -326,15 +348,24 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
             continue
         labels.append(ind)
         ind += 1
-        print("cluster {} mostly has data from internet domain {}".format(n, class_names_clean[clusters_to_classes[n]]))
+        #print("cluster {} mostly has data from internet domain {}".format(n,clusters_to_classes[n]))
 
     main_plot = plt.figure(figsize=(8, 8))
     plt.subplots_adjust(bottom=0.1, top=0.95, hspace=.15, wspace=.05, left=.09, right=.99)
     agg = AgglomerativeClustering(distance_threshold=0, linkage="average", affinity='precomputed', n_clusters=None)
-    agg = agg.fit(kl_div_array)
+
+    #agg = agg.fit(kl_div_array)
+    if not config.find_clusters_for_unseen:
+        agg_fitted = agg.fit(kl_div_array)
+        with open("{}/agglomerativeclustering.pkl".format(config.name), 'wb') as f:
+            pickle.dump(agg_fitted, f)
+    else: 
+        exit()
+        with open("{}/agglomerativeclustering.pkl".format(config.trained_gmm_path), 'rb') as f:
+            agg_fitted = pickle.load(f)
 
     ii = itertools.count(kl_div_array.shape[0])
-    agg_clusters = [{'node_id': next(ii), 'left': x[0], 'right': x[1]} for x in agg.children_]
+    agg_clusters = [{'node_id': next(ii), 'left': x[0], 'right': x[1]} for x in agg_fitted.children_]
 
     import copy
     n_points = kl_div_array.shape[0]
@@ -351,11 +382,11 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
         print(" '{}': {},".format(key, value))
 
     plt.title('Hierarchical Clustering Dendrogram')
-    plot_dendrogram(agg,  truncate_mode='level', labels=labels,
+    plot_dendrogram(agg_fitted,  truncate_mode='level', labels=labels,
                     leaf_font_size=9, leaf_rotation=0)
 
-    main_plot.savefig("{}/main_dendrogram.pdf".format(name), bbox_inches='tight')
+    main_plot.savefig("{}/main_dendrogram.pdf".format(config.name), bbox_inches='tight')
 
     plt.show()
 
-    return best_accuracy
+    return train_accuracy

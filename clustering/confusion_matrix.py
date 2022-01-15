@@ -10,7 +10,7 @@ from sklearn.utils.multiclass import unique_labels
 def plot_confusion_matrix(y_true, y_pred, classes,
                           normalize=False,
                           title=None,
-                          cmap=plt.cm.Blues, max_size=None):
+                          cmap=plt.cm.Blues, max_size=None, name='new_clusters'):
     """
     This function prints and plots the confusion matrix.
     Normalization can be applied by setting `normalize=True`.
@@ -26,6 +26,7 @@ def plot_confusion_matrix(y_true, y_pred, classes,
     # Only use the labels that appear in the data
     uniq = unique_labels(y_true, y_pred)
     classes = np.array(classes)[uniq]
+
     if normalize:
         cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
         print("Normalized confusion matrix")
@@ -36,12 +37,13 @@ def plot_confusion_matrix(y_true, y_pred, classes,
         return(100 * x/max_size)
 
     domain_x_percentage_in_each_cluster = np.apply_along_axis(myfunction, axis=1, arr=cm)
-    print(cm)
+    #print(cm)
 
-    print("Each cluster has this many sequences:")
+    #print("Each cluster has this many sequences:")
     num_sequences_per_cluster = np.sum(cm, axis=0)
-    print(num_sequences_per_cluster)
-    classes = [c.replace('_dev', '') for c in classes]
+    #print(num_sequences_per_cluster)
+    # classes = [c.replace('_dev', '') for c in classes]
+
     fig, ax = plt.subplots()
     im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
     # Show all ticks
@@ -49,13 +51,18 @@ def plot_confusion_matrix(y_true, y_pred, classes,
            yticks=np.arange(cm.shape[0]),
            # And label them with the respective list entries
            xticklabels=[i for i in range(len(classes))], yticklabels=classes,
-           ylabel='True label',
-           xlabel='Predicted label')
+           ylabel='Internet Domain',
+           xlabel='Cluster')
+
+    # Size of Internet domain + cluster
+    ax.xaxis.label.set_size(8)
+    ax.yaxis.label.set_size(8)
 
     # Rotate the tick labels and set their alignment.
+    # Size of labels for X and Y
     plt.setp(ax.get_xticklabels(), rotation=0, ha="right",
              rotation_mode="anchor", fontsize=4)
-    plt.setp(ax.get_yticklabels(), fontsize=4)
+    plt.setp(ax.get_yticklabels(), fontsize=6)
     # Loop over data dimensions and create text annotations.
     fmt = '.2f' if normalize else 'd'
     thresh = cm.max() / 2.
@@ -65,5 +72,5 @@ def plot_confusion_matrix(y_true, y_pred, classes,
                     ha="center", va="center",
                     color="white" if cm[i, j] > thresh else "black", size=4)
     fig.tight_layout()
-    fig.savefig("./main_confusion.pdf", bbox_inches='tight')
+    fig.savefig("{}/main_confusion.pdf".format(name), bbox_inches='tight')
     return ax, num_sequences_per_cluster, domain_x_percentage_in_each_cluster

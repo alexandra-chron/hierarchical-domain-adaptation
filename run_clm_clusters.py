@@ -25,7 +25,7 @@ import logging
 import math
 import time
 from collections import defaultdict
-
+import time
 import numpy as np
 import os
 import sys
@@ -51,7 +51,7 @@ from transformers.trainer_pt_utils import find_batch_size
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils.versions import require_version
 
-from clustering.gmm_clusters_and_hierarchical_clustering import fit_gmm_and_hierarchical
+from clustering.gmm_clusters_tune import fit_gmm_and_hierarchical
 from models.modeling_gpt2 import GPT2LMHeadModel
 from models.configuration_gpt2 import GPT2Config
 from trainer import Trainer
@@ -142,6 +142,10 @@ class DataTrainingArguments:
         default=None,
         metadata={"help": "An optional input evaluation data file to evaluate the perplexity on (a text file)."},
     )
+    name: Optional[str] = field(default=None, metadata={"help": "Dwse onoma sta clusters re papara"
+        })
+
+    trained_gmm_path: Optional[str] = field(default=None, metadata={"help": "Apo pou na diavasw to gmm re stravadi"})
     max_train_samples: Optional[int] = field(
         default=None,
         metadata={
@@ -163,10 +167,11 @@ class DataTrainingArguments:
             "value if set."
         },
     )
-    use_adapters: Optional[bool] = field(
+
+    find_clusters_for_unseen: Optional[bool] = field(
         default=False,
         metadata={
-            "help": "Are we using adapters"
+            "help": "Are we going to train the gmm or just run to get predictions for unknown domains"
         },
     )
     num_domains: Optional[int] = field(
@@ -176,23 +181,10 @@ class DataTrainingArguments:
                     "with the domain hierarchy and the domain_names.json"
         },
     )
-    adapter_size: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Size of each adapter layer"
-        },
-    )
     vocab_overlap: Optional[bool] = field(
         default=False,
         metadata={
             "help": "Compute the vocabulary overlap of given domains"
-        },
-    )
-    use_tree_structure: Optional[bool] = field(
-        default=True,
-        metadata={
-            "help": "Use tree structure for adapters. If it is false, use simple multi-task/single-task learning "
-                    "based on the num_domains"
         },
     )
     block_size: Optional[int] = field(
@@ -248,7 +240,7 @@ def main():
         datefmt="%m/%d/%Y %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
-
+    start =time.time()
     log_level = training_args.get_process_log_level()
     logger.setLevel(log_level)
     datasets.utils.logging.set_verbosity(log_level)
@@ -281,20 +273,31 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
     config = GPT2Config.from_pretrained(model_args.model_name_or_path)
-    config.use_adapters = data_args.use_adapters
+    config.use_adapters = False
     config.num_domains = data_args.num_domains
-    config.adapter_size = data_args.adapter_size
-    config.use_tree_structure = data_args.use_tree_structure
+    config.adapter_size = None
+    config.use_tree_structure = False
     config.vocab_overlap = data_args.vocab_overlap
+    config.percentage_of_domain_in_cluster = None
+    config.find_clusters_for_unseen = data_args.find_clusters_for_unseen
+    config.name = data_args.name
+    config.trained_gmm_path = data_args.trained_gmm_path
+    config.domain_to_cluster = None
 
     if config.num_domains:
         if config.use_tree_structure:
             with open('domain_dict.json', 'r') as f:
                 config.domain_dict = {int(k): v for (k, v) in json.load(f).items()}
-        with open('domain_names.json', 'r') as f:
-            config.domains = []
-            for (k, v) in json.load(f).items():
-                config.domains.append(v)
+        if config.find_clusters_for_unseen:
+            with open('unseen_domain_names_new.json', 'r') as f:
+                config.domains = []
+                for (k, v) in json.load(f).items():
+                    config.domains.append(v)
+        else:
+            with open('domain_names_new.json', 'r') as f:
+                config.domains = []
+                for (k, v) in json.load(f).items():
+                    config.domains.append(v)
         if config.use_tree_structure:
             assert config.num_domains == len(config.domains), "Make sure you have provided a domain_names.json that" \
                                                           " lists ALL domains (number" \
@@ -305,50 +308,63 @@ def main():
                                                                                                                    len(config.domains)))
     path = "/".join(data_args.train_file.split("/")[:2]) + "/"
 
-    if data_args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset(
-            data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
-        )
-        if "validation" not in raw_datasets.keys():
-            raw_datasets["validation"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-            )
-            raw_datasets["train"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-            )
+    domain = config.domains[0]
+    #split = "train"
+    if os.path.isdir("./corpora/cached_datasets_clustering/{}_{}".format(domain, 'valid')):
+        saved_in_disk = True
     else:
-        domains = config.domains
-        data_files = {}
-        for domain in domains:
-            data_files[domain] = {}
-            if training_args.do_train:
-                for split in ["train", "valid"]:
-                    if split == "valid": temp_split = "val"
-                    else: temp_split = "train"
-                    data_files[domain][split] = path + domain + "." + temp_split + ".json"
-            else:
-                split = "valid"
-                temp_split = "train"
-                data_files[domain][split] = path + domain + "." + temp_split + ".json"
+        saved_in_disk = False
+    #saved_in_disk=False
+    domains = config.domains
 
-        raw_datasets = {}
-        for domain in domains:
-            raw_datasets[domain] = {}
-        for domain in domains:
-            if training_args.do_train:
-                for split in ["train", "valid"]:
-                    raw_datasets[domain][split] = load_dataset("text", data_files={split: data_files[domain][split]},
-                                                               split=split, cache_dir=model_args.cache_dir)
-            else:
-                raw_datasets[domain]["valid"] = load_dataset("text", data_files={"valid": data_files[domain]["valid"]},
-                                                           split="valid", cache_dir=model_args.cache_dir)
+    if not saved_in_disk:
+
+        if data_args.dataset_name is not None:
+            # Downloading and loading a dataset from the hub.
+            raw_datasets = load_dataset(
+                data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
+            )
+            if "validation" not in raw_datasets.keys():
+                raw_datasets["validation"] = load_dataset(
+                    data_args.dataset_name,
+                    data_args.dataset_config_name,
+                    split=f"train[:{data_args.validation_split_percentage}%]",
+                    cache_dir=model_args.cache_dir,
+                )
+                raw_datasets["train"] = load_dataset(
+                    data_args.dataset_name,
+                    data_args.dataset_config_name,
+                    split=f"train[{data_args.validation_split_percentage}%:]",
+                    cache_dir=model_args.cache_dir,
+                )
+        else:
+            domains = config.domains
+            data_files = {}
+            for domain in domains:
+                data_files[domain] = {}
+                if training_args.do_train:
+                    for split in ["train", "valid"]:
+                        if split == "valid": temp_split = "val"
+                        else: temp_split = "train"
+                        data_files[domain][split] = path + domain + "." + temp_split + ".json"
+                else:
+                    # We get data from the TRAINING set to form the clusters
+                    split = "valid"
+                    temp_split = "train"
+                    data_files[domain][split] = path + domain + "." + temp_split + ".json"
+
+            raw_datasets = {}
+            for domain in domains:
+                raw_datasets[domain] = {}
+            for domain in domains:
+                if training_args.do_train:
+                    for split in ["train", "valid"]:
+                        raw_datasets[domain][split] = load_dataset("text", data_files={split: data_files[domain][split]},
+                                                                   split=split, cache_dir=model_args.cache_dir)
+                else:
+                    print(domain)
+                    raw_datasets[domain]["valid"] = load_dataset("text", data_files={"valid": data_files[domain]["valid"]},
+                                                               split="valid", cache_dir=model_args.cache_dir)
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -360,16 +376,7 @@ def main():
 
     tokenizer = GPT2Tokenizer.from_pretrained(model_args.model_name_or_path)
     model = GPT2LMHeadModel.from_pretrained(model_args.model_name_or_path, config=config,
-                                            cache_dir=model_args.cache_dir
-                                            )
-
-    # Preprocessing the datasets.
-    # First we tokenize all the texts.
-    column_names = raw_datasets[domains[0]]["valid"].column_names
-    text_column_name = "text" if "text" in column_names else column_names[0]
-
-    # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
-    tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
+                                            cache_dir=model_args.cache_dir)
 
     def tokenize_function(examples):
         with CaptureLogger(tok_logger) as cl:
@@ -381,12 +388,35 @@ def main():
             )
         return output
 
-    with training_args.main_process_first(desc="dataset map tokenization"):
-        tokenized_datasets = {}
-        for domain in domains:
-            tokenized_datasets[domain] = {}
-            if training_args.do_train:
-                for split in ["train", "valid"]:
+    if not saved_in_disk:
+        # Preprocessing the datasets.
+        # First we tokenize all the texts.
+
+        if training_args.do_train:
+            column_names = raw_datasets[domains[0]]["train"].column_names
+        else:
+            column_names = raw_datasets[domains[0]]["valid"].column_names
+        text_column_name = "text" if "text" in column_names else column_names[0]
+
+        # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
+        tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
+
+        with training_args.main_process_first(desc="dataset map tokenization"):
+            tokenized_datasets = {}
+            for domain in domains:
+                tokenized_datasets[domain] = {}
+                if training_args.do_train:
+                    for split in ["train", "valid"]:
+                        tokenized_datasets[domain][split] = raw_datasets[domain][split].map(
+                            tokenize_function,
+                            batched=True,
+                            num_proc=data_args.preprocessing_num_workers,
+                            remove_columns=column_names,
+                            load_from_cache_file=not data_args.overwrite_cache,
+                            desc="Running tokenizer on dataset",
+                        )
+                else:
+                    split = "valid"
                     tokenized_datasets[domain][split] = raw_datasets[domain][split].map(
                         tokenize_function,
                         batched=True,
@@ -395,16 +425,6 @@ def main():
                         load_from_cache_file=not data_args.overwrite_cache,
                         desc="Running tokenizer on dataset",
                     )
-            else:
-                split = "valid"
-                tokenized_datasets[domain][split] = raw_datasets[domain][split].map(
-                    tokenize_function,
-                    batched=True,
-                    num_proc=data_args.preprocessing_num_workers,
-                    remove_columns=column_names,
-                    load_from_cache_file=not data_args.overwrite_cache,
-                    desc="Running tokenizer on dataset",
-                )
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -439,41 +459,33 @@ def main():
         result["labels"] = result["input_ids"].copy()
         return result
 
-    lm_datasets = {}
-    for domain in domains:
-        lm_datasets[domain] = {}
-        split = "valid"
-        with training_args.main_process_first(desc="grouping texts together"):
-            lm_datasets[domain][split] = tokenized_datasets[domain][split].map(
-                group_texts,
-                batched=True,
-                num_proc=data_args.preprocessing_num_workers,
-                load_from_cache_file=not data_args.overwrite_cache,
-                desc=f"Grouping texts in chunks of {block_size}",
+    if not saved_in_disk:
+        lm_datasets = {}
+        for domain in domains:
+            lm_datasets[domain] = {}
+            split = "valid"
+            with training_args.main_process_first(desc="grouping texts together"):
+                lm_datasets[domain][split] = tokenized_datasets[domain][split].map(
+                    group_texts,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc=f"Grouping texts in chunks of {block_size}",
                 )
+            lm_datasets[domain][split].save_to_disk("./corpora/cached_datasets_clustering/{}_{}".format(domain, split))
 
-    if config.vocab_overlap:
-        vocab = {}
-        for i, domain in enumerate(domains):
-            vocab[domain] = set()
-            # for row in range(min(data_args.max_train_samples, len(lm_datasets[domain]["train"].data.columns[1]))):
-            for row in range(len(lm_datasets[domain]['train'].data.columns[1])):
-                for token_id in lm_datasets[domain]['train'].data.columns[1][row]:
-                    if token_id not in vocab:
-                        vocab[domain].add(int(str((token_id))))
-        for i, current_domain in enumerate(domains):
-            for next_domain in domains[i+1:]:
-                if len(domains[i+1:]) > 0:
-                    vocab_overlap = len(vocab[current_domain].intersection(vocab[next_domain]))
-                    logger.warning("The vocabulary overlap between {} and {} is {}.".format(current_domain,
-                                                                                   next_domain,
-                                                                                   vocab_overlap))
-    train_datasets = []
+    else:
+        lm_datasets = {}
+        for domain in domains:
+            split = 'valid'
+            lm_datasets[domain] = {}
+            lm_datasets[domain]["valid"] = datasets.load_from_disk("./corpora/cached_datasets_clustering/{}_{}".format(domain, split))
+
     eval_datasets = []
     if training_args.do_eval:
         for domain in domains:
-            if "valid" not in tokenized_datasets[domain]:
-                raise ValueError("--do_eval requires a validation dataset")
+            # if "valid" not in tokenized_datasets[domain]:
+            #     raise ValueError("--do_eval requires a validation dataset")
             eval_datasets.append(lm_datasets[domain]["valid"])
 
         if data_args.max_eval_samples is not None:
@@ -538,11 +550,13 @@ def main():
                 model_to_states[model_name]['states'] = np.stack(np_tensors)
                 model_to_domain_to_encodings_new.extend(model_to_states[model_name]['states'])
                 num_clusters += 1
+            #print(model_to_domain_to_encodings_new[0][:10])
+            #exit()
 
 
     # cluster the new split dev data
     first_principal = 1
-    last_principal = 50
+    last_principal = 100
     num_experiments = 1
     use_pca = True
 
@@ -554,15 +568,22 @@ def main():
         else:
             plot = False
             confusion = False
-
-        accuracy = fit_gmm_and_hierarchical(model_to_domain_to_encodings_new, domains,
+        
+        print("Domains: {}".format(domains))
+        print("Number of clusters : {}".format(num_clusters))
+        print("Maximum size of samples {}".format(max_size))
+        print(len(model_to_domain_to_encodings_new))
+        print("Pca size is {}".format(last_principal))
+        
+        aacuracy = fit_gmm_and_hierarchical(model_to_domain_to_encodings_new, domains,
                                             first_principal_component_shown=first_principal,
                                             last_principal_component_shown=last_principal,
                                             clusters=num_clusters,
                                             pca=use_pca, confusion=confusion,
-                                            examples_per_class=max_size)
-        model_to_accuracies[model_name].append(accuracy)
-
+                                            examples_per_class=max_size, config=config)
+    
+        end = time.time()
+    print("Time needed for the experiment: {}".format(end-start))
     for model_name in model_to_accuracies:
         print('{0}\t{1:.2f} (±{2:.2f})'.format(model_name,
                                                np.mean(np.array(model_to_accuracies[model_name])),

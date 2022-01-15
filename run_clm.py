@@ -285,7 +285,7 @@ def main():
     config.use_tree_structure = data_args.use_tree_structure
     config.vocab_overlap = data_args.vocab_overlap
     config.percentage_of_domain_in_cluster = data_args.percentage_of_domain_in_cluster
-
+    
     if config.percentage_of_domain_in_cluster is not None:
         temp = np.load('internet_domain_percentage_in_each_cluster.npy', 'r')
         idx = np.argwhere(np.all(temp[..., :] == 0, axis=0))
@@ -297,6 +297,9 @@ def main():
             with open('domain_dict.json', 'r') as f:
                 temp = {int(k): v for (k, v) in json.load(f).items()}
                 config.domain_dict = {k: v for k, v in sorted(temp.items(), key=lambda item: item[0])}
+        with open('domain_to_cluster.json', 'r') as f:
+            temp = {int(k) : v for (k,v) in json.load(f).items()}
+            config.domain_to_cluster = {k:v for k,v in sorted(temp.items(), key=lambda item: item[0])}
         with open('domain_names.json', 'r') as f:
             config.domains = []
             for (k, v) in json.load(f).items():
@@ -309,6 +312,7 @@ def main():
             if len(config.domains) > config.num_domains:
                 print("There is {} set of adapters for {} domains!!!! We will train multi-domain adapters!".format(config.num_domains,
                                                                                                                    len(config.domains)))
+        
     path = "/".join(data_args.train_file.split("/")[:2]) + "/"
 
     # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
@@ -422,10 +426,10 @@ def main():
         for param in model.named_parameters():
             if "adapter" not in param[0]:
                 param[1].requires_grad = False
-        # for param in model.named_parameters():
-        #     if "layer_norm_before_adapter" in param[0]:
-        #         param[1].requires_grad = True
-        #         logger.warning(param[0])
+        #for param in model.named_parameters():
+        #    if "layer_norm_before_adapter" in param[0]:
+        #        param[1].requires_grad = True
+
     # logger.info(model)
     logger.info(
         "Number of parameters = {}, "
@@ -547,11 +551,17 @@ def main():
                         load_from_cache_file=not data_args.overwrite_cache,
                         desc=f"Grouping texts in chunks of {block_size}",
                     )
+                    lm_datasets[domain][split].save_to_disk("./corpora/cached_datasets/{}_{}".format(domain, split))
     else:
         lm_datasets = {}
         for domain in domains:
             lm_datasets[domain] = {}
-            for split in ["train", "valid"]:
+            if training_args.do_train:
+                for split in ["train", "valid"]:
+                    lm_datasets[domain][split] = datasets.load_from_disk("./corpora/cached_datasets/{}_{}".format(domain, split))
+    
+            else:
+                split = "valid"
                 lm_datasets[domain][split] = datasets.load_from_disk("./corpora/cached_datasets/{}_{}".format(domain, split))
     if config.vocab_overlap:
         vocab = {}
@@ -618,7 +628,7 @@ def main():
             checkpoint = training_args.resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
-
+        
         if trainer.state.global_step == 0:
             logger.info("*** Evaluate before starting training ***")
 
@@ -637,7 +647,7 @@ def main():
             metrics["perplexity"] = perplexity
             trainer.log_metrics("eval", metrics)
             trainer.save_metrics("eval", metrics)
-
+        
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()  # Saves the tokenizer too for easy upload
 
@@ -653,7 +663,7 @@ def main():
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
-
+    
     # Evaluation
     if training_args.do_eval:
         logger.info("*** Evaluate ***")

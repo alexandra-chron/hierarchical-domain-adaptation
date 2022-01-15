@@ -16,13 +16,14 @@ from clustering.confusion_matrix import plot_confusion_matrix
 
 print(__doc__)
 
-colors = ['red', 'green', 'blue', "yellow", 'brown', 'black', 'chocolate', 'darkblue', 'purple', 'orange']
+colors = ['red', 'green', 'blue',  'brown', 'black', 'chocolate', 'darkblue', 'purple', 'orange']
 
 
 def make_ellipses(gmm, ax, clusters_to_classes, colors):
     """
     Adds Ellipses to ax according to the gmm clusters.
     """
+    print("Will print cluster and corresponding domain")
     for n in sorted(list(clusters_to_classes.keys())):
         if gmm.covariance_type == 'full':
             covariances = gmm.covariances_[n][:2, :2]
@@ -38,7 +39,10 @@ def make_ellipses(gmm, ax, clusters_to_classes, colors):
         angle = 180 * angle / np.pi  # convert to degrees
         v = 2. * np.sqrt(2.) * np.sqrt(v)
         class_id = clusters_to_classes[n]
-        class_id = class_id % 10
+        #print(n, class_id) 
+        #print("row {} of gmm ".format(n))
+        class_id = class_id % 9
+        
         class_color = colors[class_id]
         ell = mpl.patches.Ellipse(gmm.means_[n, :2], v[0], v[1],
                                   180 + angle, color=class_color, linewidth=0)
@@ -54,6 +58,7 @@ def map_clusters_to_classes_by_majority(y_train, y_train_pred):
     """
     cluster_to_class = {}
     class_to_cluster = {}
+    counter_clusters = []
     for cluster in np.unique(y_train_pred):
         # run on indices where this is the cluster
         original_classes = []
@@ -62,8 +67,20 @@ def map_clusters_to_classes_by_majority(y_train, y_train_pred):
                 original_classes.append(y_train[i])
         # take majority
         cluster_to_class[cluster] = max(set(original_classes), key=original_classes.count)
+        #print(set(original_classes))
+        from collections import Counter
+        #print("cluster {}, domain {}".format(cluster, cluster_to_class[cluster]))
+        #print(cluster_to_class[cluster])
+        counter_clusters.append(Counter(original_classes))
+        #print(Counter(original_classes))
+        #print(original_classes)
+        #print("--")
+        #for domain_predicted in class_to_cluster:
         class_to_cluster[max(set(original_classes), key=original_classes.count)] = cluster
-    return cluster_to_class, class_to_cluster
+    #print("----")
+    #for domain in class_to_cluster:
+    #    print(domain, class_to_cluster[domain])
+    return cluster_to_class, class_to_cluster, counter_clusters
 
 
 def fit_gmm(name_to_embeddings, class_names, first_principal_component_shown=0,
