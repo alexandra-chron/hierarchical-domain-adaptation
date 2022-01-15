@@ -68,7 +68,7 @@ GPT2_PRETRAINED_MODEL_ARCHIVE_LIST = [
 class Adapter(nn.Module):
     def __init__(self, config, adapter_size=None):
         super(Adapter, self).__init__() 
-        self.layer_norm = LayerNorm(config.hidden_size)
+        #self.layer_norm = LayerNorm(config.hidden_size)
 
         self.down_project = nn.Linear(config.hidden_size, config.adapter_size)
         self.activation = nn.ReLU()
