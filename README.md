@@ -70,6 +70,8 @@ It creates a ```eval10_doms/``` directory, where you can find the ```domain_to_c
 
 ## 5. (Optional)  Evaluate hierarchical model out of domain
 
+Define the domains you want to evaluate on in the ```domain_names.json``` script (main directory).
+
 ```
 
 python run_clm.py --model_name_or_path ./dumped/$YOUR_EXPERIMENT_NAME/ --do_eval --output_dir ./dumped/eval --use_adapters True --adapter_size 64 --use_tree_structure True --num_domains 10 --overwrite_output_dir --block_size 800 --per_device_eval_batch_size 16
