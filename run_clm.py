@@ -390,45 +390,11 @@ def main():
     tokenizer = GPT2Tokenizer.from_pretrained(model_args.model_name_or_path)
     model = GPT2LMHeadModel.from_pretrained(model_args.model_name_or_path, config=config,
                                             cache_dir=model_args.cache_dir)
-    if data_args.average_single_adapters:
-        config.num_domains = 1
-        model1 = GPT2LMHeadModel.from_pretrained('./dumped/', config=config,
-                                                cache_dir=model_args.cache_dir)
-        model2 = GPT2LMHeadModel.from_pretrained('./dumped/', config=config,
-                                                cache_dir=model_args.cache_dir)
-        model3 = GPT2LMHeadModel.from_pretrained('./dumped/', config=config,
-                                                cache_dir=model_args.cache_dir)
-        model4 = GPT2LMHeadModel.from_pretrained('./dumped/', config=config,
-                                                cache_dir=model_args.cache_dir)
-
-        adapters_params = {}
-        for param in model1.named_parameters():
-            if "adapter" in param[0]:
-                adapters_params[param[0]] = param[1]
-
-        for param in model2.named_parameters():
-            if "adapter" in param[0]:
-                temp = param[0].replace("adapter_module.0", "adapter_module.1")
-                adapters_params[temp] = param[1]
-
-        for param in model3.named_parameters():
-            if "adapter" in param[0]:
-                temp = param[0].replace("adapter_module.0", "adapter_module.2")
-                adapters_params[temp] = param[1]
-
-        for param in model4.named_parameters():
-            if "adapter" in param[0]:
-                temp = param[0].replace("adapter_module.0", "adapter_module.3")
-                adapters_params[temp] = param[1]
-        model.load_state_dict(adapters_params, strict=False)
 
     if config.use_adapters:
         for param in model.named_parameters():
             if "adapter" not in param[0]:
                 param[1].requires_grad = False
-        #for param in model.named_parameters():
-        #    if "layer_norm_before_adapter" in param[0]:
-        #        param[1].requires_grad = True
 
     # logger.info(model)
     logger.info(
