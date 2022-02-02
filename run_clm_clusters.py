@@ -37,6 +37,7 @@ import datasets
 import json
 from datasets import load_dataset
 # os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+from clustering.gmm_clusters_tune import fit_gmm_and_hierarchical
 
 import transformers
 from transformers import (
@@ -51,7 +52,7 @@ from transformers.trainer_pt_utils import find_batch_size
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils.versions import require_version
 
-from clustering.gmm_clusters_tune import fit_gmm_and_hierarchical
+from clustering.gmm_clusters_inference import inference_from_gmm
 from models.modeling_gpt2 import GPT2LMHeadModel
 from models.configuration_gpt2 import GPT2Config
 from trainer import Trainer
@@ -547,12 +548,11 @@ def main():
                 end = time.time()
                 print('encoded with {} in {} seconds'.format(model_name, end - start))
                 np_tensors = [np.array(tensor) for tensor in model_to_states[model_name]['states']]
+
                 model_to_states[model_name]['states'] = np.stack(np_tensors)
                 model_to_domain_to_encodings_new.extend(model_to_states[model_name]['states'])
                 num_clusters += 1
-            #print(model_to_domain_to_encodings_new[0][:10])
             #exit()
-
 
     # cluster the new split dev data
     first_principal = 1
@@ -575,13 +575,21 @@ def main():
         print(len(model_to_domain_to_encodings_new))
         print("Pca size is {}".format(last_principal))
         
-        aacuracy = fit_gmm_and_hierarchical(model_to_domain_to_encodings_new, domains,
+        if not config.find_clusters_for_unseen:
+            accuracy = fit_gmm_and_hierarchical(model_to_domain_to_encodings_new, domains,
                                             first_principal_component_shown=first_principal,
                                             last_principal_component_shown=last_principal,
                                             clusters=num_clusters,
                                             pca=use_pca, confusion=confusion,
                                             examples_per_class=max_size, config=config)
     
+        else:
+            inference_from_gmm(model_to_domain_to_encodings_new, domains,
+                                             first_principal_component_shown=first_principal,
+                                             last_principal_component_shown=last_principal,
+                                             clusters=num_clusters,
+                                             pca=use_pca, confusion=confusion,
+                                             examples_per_class=max_size, config=config, plot=plot)
         end = time.time()
     print("Time needed for the experiment: {}".format(end-start))
     for model_name in model_to_accuracies:

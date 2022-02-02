@@ -11,7 +11,7 @@ import scipy.cluster.hierarchy as shc
 from sklearn.cluster import AgglomerativeClustering
 from clustering.confusion_matrix import plot_confusion_matrix
 from clustering.gmm_clusters import map_clusters_to_classes_by_majority, make_ellipses
-
+import json
 print(__doc__)
 
 colors = ['red', 'green', 'blue', 'brown', 'black', 'chocolate', 'darkblue', 'purple', 'orange']
@@ -78,14 +78,14 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     # Compute PCA
     if pca:
         pca = PCA(n_components=1 + last_principal_component_shown)
-        #pca_transform = pca.fit(name_to_embeddings)[:, list(range(first_principal_component_shown, last_principal_component_shown + 1))]
         if not config.find_clusters_for_unseen: 
+            logger.warning(name_to_embeddings.shape)
             pca_fitted = pca.fit(name_to_embeddings)
-            with open('pca.pkl', 'wb') as f:
+            with open('{}/pca.pkl'.format(name), 'wb') as f:
                 pickle.dump(pca_fitted, f)
                 print("Saved PCA fitted")
         else:
-            with open('pca.pkl', 'rb') as f:
+            with open('{}/pca.pkl'.format(name), 'rb') as f:
                 pca_fitted = pickle.load(f)
                 print("Loaded PCA fitted")
         
@@ -251,8 +251,6 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
 
         # Calculate the Purity metric
         count = 0
-        if not config.find_clusters_for_unseen:
-            np.save('{}/internet_domain_percentage_in_each_cluster.npy'.format(name), domain_x_percentage_in_each_cluster)
         
         for i, pred in enumerate(y_train_pred):
             if clusters_to_classes[pred] == y_train[i]:
@@ -300,6 +298,9 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
             g_covariances.append(covariances)
     print(class_names_clean)
     print(domain_x_percentage_in_each_cluster)
+
+    with open('{}/ignored_clusters.json'.format(config.name), 'w') as f:
+        json.dump(ignored_clusters, f)
 
     kl_div_average_list = []
 
@@ -357,5 +358,6 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     main_plot.savefig("{}/main_dendrogram.pdf".format(name), bbox_inches='tight')
 
     plt.show()
-
+    #with open('{}/ignored_clusters.json'.format(name), 'w') as f:
+    #    json.dump(ignored_clusters, f)
     return best_accuracy

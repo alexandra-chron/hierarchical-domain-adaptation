@@ -11,6 +11,7 @@ import scipy.cluster.hierarchy as shc
 from sklearn.cluster import AgglomerativeClustering
 from clustering.confusion_matrix import plot_confusion_matrix
 from clustering.gmm_clusters import map_clusters_to_classes_by_majority, make_ellipses
+import json 
 
 print(__doc__)
 
@@ -83,8 +84,8 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     # Compute PCA
     if pca:
         pca = PCA(n_components=1 + last_principal_component_shown)
-        #pca_transform = pca.fit(name_to_embeddings)[:, list(range(first_principal_component_shown, last_principal_component_shown + 1))]
-        if not config.find_clusters_for_unseen: 
+        #if not config.find_clusters_for_unseen: 
+        if not config.trained_gmm_path:
             pca_fitted = pca.fit(name_to_embeddings)
             filename = '{}/pca.pkl'.format(name)
             with open(filename, 'wb') as f:
@@ -100,7 +101,6 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
         pca_data = name_to_embeddings
     
     pca_labels = []
-    #print("We have {} classes".format(class_names))
     for i in range(len(class_names)):
         for j in range(examples_per_class):
             pca_labels.append(i)
@@ -108,7 +108,6 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     
     # Do not split the data - train=test=all (unsupervised evaluation)
     train_index = list(range(0, pca_data.shape[0]))
-    print(pca_data.shape)
     X_train = pca_data[train_index]
     y_train = pca_labels[train_index]
     
@@ -136,7 +135,7 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
         #name = config.name
 
         # train the GMM
-        if config.find_clusters_for_unseen:
+        if config.trained_gmm_path:#find_clusters_for_unseen:
             with open('{}/gmm_estimator.pkl'.format(config.trained_gmm_path), 'rb') as f:
                 estimator_used = pickle.load(f)
                 print("Loaded trained GMM")
@@ -146,10 +145,6 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
             with open('{}/gmm_estimator.pkl'.format(config.name), 'wb') as f:
                 pickle.dump(estimator_used, f)
                 print("Saved trained GMM")
-        #bic.append(estimator_used.bic(X_train))
-
-        #print('full', 'spherical', 'diag', 'tied')
-        #print(bic)
         
         class_names_clean = []
 
@@ -214,8 +209,6 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
                                                                                                       name=config.name)
         # Calculate the Purity metric
         count = 0
-        #if not config.find_clusters_for_unseen:
-        #    np.save('{}/internet_domain_percentage_in_each_cluster.npy'.format(config.name), domain_x_percentage_in_each_cluster)
         
         for i, pred in enumerate(y_train_pred):
             if clusters_to_classes[pred] == y_train[i]:
@@ -241,9 +234,11 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     print("train_acc")
     print(train_accuracy)
     #return train_accuracy
+    #if not config.find_clusters_for_unseen:
     g_means, g_covariances = [], []
     ignored_clusters = []
     nonempty_clusters = []
+    
     for n_cluster in range(n_clusters):
         #if num_sequences_per_cluster[n_cluster] == 0:
         if n_cluster not in classes_to_clusters.values():
@@ -255,6 +250,7 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
             means = np.array(estimator_used.means_[n_cluster, :2])
             g_means.append(means.transpose())
             g_covariances.append(covariances)
+    
     match_old_new_clusters = {}
     cluster_id = 0
     for i in range(n_clusters):
@@ -262,18 +258,17 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
             match_old_new_clusters[i] = cluster_id
             cluster_id += 1
     print("The old clusters correspond to the new ones as shown in dict (empty clusters deleted): \n {}".format(match_old_new_clusters))
-    #print("---")
     domains_picked = []
     for cl in clusters_to_classes:
         if cl in ignored_clusters:
             continue
         domains_picked.append(clusters_to_classes[cl])
-        print("Cluster {} has by majority domain {}".format(cl, clusters_to_classes[cl]))
+        #print("Cluster {} has by majority domain {}".format(cl, clusters_to_classes[cl]))
     
     domains_not_picked = []
     for i in range(n_clusters):
         if i not in domains_picked:
-            print("Domain {} is not a majority in any cluster".format(i))
+            #print("Domain {} is not a majority in any cluster".format(i))
             domains_not_picked.append(i)
 
     for dom in domains_not_picked:
@@ -290,8 +285,8 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
             clusters_to_classes[assign_to_cluster] = []
             clusters_to_classes[assign_to_cluster].append(temp)
             clusters_to_classes[assign_to_cluster].append(unpicked_dom)
-            print(clusters_to_classes[assign_to_cluster])
-            print("Domain {} assigned to (old) cluster {}, it has {} samples that have max prob to go there".format(unpicked_dom,assign_to_cluster, max_samples))
+            #print(clusters_to_classes[assign_to_cluster])
+            #print("Domain {} assigned to (old) cluster {}, it has {} samples that have max prob to go there".format(unpicked_dom,assign_to_cluster, max_samples))
     
     clusters_to_classes_new = {}
     for i in clusters_to_classes.keys():
@@ -304,25 +299,35 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
         clusters_to_classes_final_indices[key_final] = value
     
     classes_to_clusters_final = {}
-
+    
     print("Cluster to domains final dictionary: {}".format(clusters_to_classes_final_indices))
     for key, value in clusters_to_classes_final_indices.items():
-        print(value)
         if isinstance(value, list):
-            print("MPIKA")
             for val in value:
-                classes_to_clusters_final[str(val)] = key 
+                if isinstance(val, list):
+                    for inner_val in val:
+                        classes_to_clusters_final[str(inner_val)] = key
+                else:
+                    classes_to_clusters_final[str(val)] = key 
         else:
             classes_to_clusters_final[str(value)] = key
-    print(classes_to_clusters_final)
-    import json
+    
+    print("Classes to clusters {}".format(classes_to_clusters_final))
+    
+    match_old_new = {}
+    for key, value in match_old_new_clusters.items():
+        match_old_new[str(key)] = value
+
     with open('{}/domain_to_cluster.json'.format(config.name), 'w') as f:
         json.dump(classes_to_clusters_final, f)
         print("saved domain-to-cluster in domain_to_cluster.json!")
-   #print("-----")
-    #print(counter_clusters)
 
-    #print(sorted(domains_picked))
+    with open('{}/ignored_clusters.json'.format(config.name), 'w') as f:
+        json.dump(ignored_clusters, f)
+   
+    with open('{}/match_old_new_clusters.json'.format(config.name), 'w') as f:
+        json.dump(match_old_new, f)
+
     kl_div_average_list = []
 
     for n in range(len(nonempty_clusters)):
@@ -355,11 +360,11 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     agg = AgglomerativeClustering(distance_threshold=0, linkage="average", affinity='precomputed', n_clusters=None)
 
     #agg = agg.fit(kl_div_array)
-    if not config.find_clusters_for_unseen:
+    if not config.trained_gmm_path:#find_clusters_for_unseen:
         agg_fitted = agg.fit(kl_div_array)
         with open("{}/agglomerativeclustering.pkl".format(config.name), 'wb') as f:
             pickle.dump(agg_fitted, f)
-    else: 
+    else:
         exit()
         with open("{}/agglomerativeclustering.pkl".format(config.trained_gmm_path), 'rb') as f:
             agg_fitted = pickle.load(f)
