@@ -26,7 +26,7 @@ The dictionary used is defined in ```domain_dict.json```. This is not needed for
 
 ## 1. Get tree structure using GMMs and hierarchical clustering
 
-Define the domains you will be using in ```domain_names_new.json```. Let's assume that you have 30 training domains. 
+Run in 1 GPU. Define the domains you will be using in ```domain_names_new.json```. Let's assume that you have 30 training domains. 
 
 ```
 
@@ -58,7 +58,8 @@ python run_clm.py --model_name_or_path ./dumped/$YOUR_EXPERIMENT_NAME/ --do_eval
 ```
 
 ## 4. (Optional)  Get domain-to-cluster allocation for out-of-domain evaluation
-Assuming you also want to evaluate on held-out datasets (domains) (if not, skip this step), you need to define those domains in ```unseen_domains_new.json```.
+
+Run in 1 GPU. Assuming you also want to evaluate on held-out datasets (domains) (if not, skip this step), you need to define those domains in ```unseen_domains_new.json```.
 Let's assume that you will evaluate on 10 held-out datasets (domains). 
  
 ```
