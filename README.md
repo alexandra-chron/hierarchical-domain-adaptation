@@ -38,7 +38,7 @@ This fits a GMM with *N* components (here, 30) to your data.
 By default it uses 1000 sequences (of 800 tokens) per domain.
 It creates a ```fit_gmm_30_components_1000_seq_per_domain_pca_100/``` directory, where you 
 can find visualizations of the clustering (GMM + hierarchical) and the ```domain_to_cluster.json, domain_dict.json```,
-which you should move to the main directory, as you will need them to train the hierarchical adapter model. 
+which you should copy to the main directory, as you will need them to train the hierarchical adapter model. 
 
 
 ## 2. Train hierarchical model 
@@ -67,7 +67,7 @@ python3 run_clm_clusters.py --model_name_or_path gpt2 --output_dir ./dumped/eval
 
 ```
 
-It creates a ```eval10_doms/``` directory, where you can find the ```domain_to_cluster.json``` file, which you should copy to the main directory (```hierarchical-domain-adaptation/corpora/```) to run the out-of-domain evaluation of the trained model. 
+It creates a ```eval10_doms/``` directory, where you can find the ```domain_to_cluster.json``` file, which you should copy to the main directory (```hierarchical-domain-adaptation/```) to run the out-of-domain evaluation of the trained model. 
 
 ## 5. (Optional)  Evaluate hierarchical model out of domain
 
