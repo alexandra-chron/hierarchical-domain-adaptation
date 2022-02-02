@@ -84,7 +84,6 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     # Compute PCA
     if pca:
         pca = PCA(n_components=1 + last_principal_component_shown)
-        #if not config.find_clusters_for_unseen: 
         if not config.trained_gmm_path:
             pca_fitted = pca.fit(name_to_embeddings)
             filename = '{}/pca.pkl'.format(name)
@@ -127,15 +126,11 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     if plot:
         main_plot = plt.figure(figsize=(8, 8))
         plt.subplots_adjust(bottom=0.1, top=0.95, hspace=.15, wspace=.05, left=.09, right=.99)
-    bic = []
-    best_accuracy = 0
+
     for index, (name, estimator) in enumerate(estimators.items()):
-        if config.find_clusters_for_unseen: suffix = 'inference'
-        else: suffix = 'training'
-        #name = config.name
 
         # train the GMM
-        if config.trained_gmm_path:#find_clusters_for_unseen:
+        if config.trained_gmm_path:
             with open('{}/gmm_estimator.pkl'.format(config.trained_gmm_path), 'rb') as f:
                 estimator_used = pickle.load(f)
                 print("Loaded trained GMM")
@@ -158,7 +153,6 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
         # create the plots
         a = []
         if plot:
-                #if not config.find_clusters_for_unseen:
                 h = plt.subplot(1, 1, 1)
                 # red, green, blue, yellow
                 # Plot the train data with dots
@@ -193,7 +187,6 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
         
         # predict the cluster ids for train
         y_train_pred = estimator_used.predict(X_train)
-        from collections import Counter
 
         # map clusters to classes by majority of true class in cluster
         clusters_to_classes, classes_to_clusters, counter_clusters = map_clusters_to_classes_by_majority(y_train, y_train_pred)
@@ -233,14 +226,12 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     # One cluster per domain
     print("train_acc")
     print(train_accuracy)
-    #return train_accuracy
-    #if not config.find_clusters_for_unseen:
+
     g_means, g_covariances = [], []
     ignored_clusters = []
     nonempty_clusters = []
     
     for n_cluster in range(n_clusters):
-        #if num_sequences_per_cluster[n_cluster] == 0:
         if n_cluster not in classes_to_clusters.values():
             print("Ignoring cluster {} as it is empty.".format(n_cluster))
             ignored_clusters.append(n_cluster)
@@ -285,9 +276,7 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
             clusters_to_classes[assign_to_cluster] = []
             clusters_to_classes[assign_to_cluster].append(temp)
             clusters_to_classes[assign_to_cluster].append(unpicked_dom)
-            #print(clusters_to_classes[assign_to_cluster])
-            #print("Domain {} assigned to (old) cluster {}, it has {} samples that have max prob to go there".format(unpicked_dom,assign_to_cluster, max_samples))
-    
+
     clusters_to_classes_new = {}
     for i in clusters_to_classes.keys():
         if i not in ignored_clusters:
@@ -353,14 +342,12 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
             continue
         labels.append(ind)
         ind += 1
-        #print("cluster {} mostly has data from internet domain {}".format(n,clusters_to_classes[n]))
 
     main_plot = plt.figure(figsize=(8, 8))
     plt.subplots_adjust(bottom=0.1, top=0.95, hspace=.15, wspace=.05, left=.09, right=.99)
     agg = AgglomerativeClustering(distance_threshold=0, linkage="average", affinity='precomputed', n_clusters=None)
 
-    #agg = agg.fit(kl_div_array)
-    if not config.trained_gmm_path:#find_clusters_for_unseen:
+    if not config.trained_gmm_path:
         agg_fitted = agg.fit(kl_div_array)
         with open("{}/agglomerativeclustering.pkl".format(config.name), 'wb') as f:
             pickle.dump(agg_fitted, f)

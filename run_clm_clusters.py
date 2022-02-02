@@ -22,8 +22,6 @@ https://huggingface.co/models?filter=causal-lm
 # You can also adapt this script on your own causal language modeling task. Pointers for this are left as comments.
 
 import logging
-import math
-import time
 from collections import defaultdict
 import time
 import numpy as np
@@ -36,7 +34,6 @@ import torch
 import datasets
 import json
 from datasets import load_dataset
-# os.environ["CUDA_VISIBLE_DEVICES"] = "6"
 from clustering.gmm_clusters_tune import fit_gmm_and_hierarchical
 
 import transformers

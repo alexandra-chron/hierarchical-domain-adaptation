@@ -1,17 +1,7 @@
-from collections import defaultdict
-
 import matplotlib as mpl
-import matplotlib.pyplot as plt
 
 import numpy as np
 
-from sklearn import datasets
-from sklearn.mixture import GaussianMixture
-from sklearn.model_selection import StratifiedKFold
-from sklearn.decomposition import PCA
-from sklearn.metrics import confusion_matrix
-
-from clustering.confusion_matrix import plot_confusion_matrix
 
 print(__doc__)
 
@@ -69,7 +59,6 @@ def map_clusters_to_classes_by_majority(y_train, y_train_pred, ignored_clusters=
                 # take the majority
                 cluster_to_class[cluster] = max(set(original_classes), key=original_classes.count)
                 from collections import Counter
-                # print("for domain {}, use path of cluster {}".format(cluster_to_class[cluster],cluster))
                 counter_clusters.append(Counter(original_classes))
                 class_to_cluster[max(set(original_classes), key=original_classes.count)] = cluster
         else:
