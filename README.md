@@ -94,3 +94,15 @@ python3 run_clm.py  --model_name_or_path gpt2 --do_train --do_eval --output_dir 
 python3 run_clm.py --model_name_or_path gpt2 --do_eval --output_dir ./dumped/eval --use_adapters False --num_domains 30 --block_size 800   --use_tree_structure False
 
 ```
+## Reference 
+
+```
+@misc{chronopoulou2021efficient,
+      title={Efficient Hierarchical Domain Adaptation for Pretrained Language Models}, 
+      author={Alexandra Chronopoulou and Matthew E. Peters and Jesse Dodge},
+      year={2021},
+      eprint={2112.08786},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL}
+}
+```
