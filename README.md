@@ -67,11 +67,11 @@ python3 run_clm_clusters.py --model_name_or_path gpt2 --output_dir ./dumped/eval
 
 ```
 
-It creates a ```eval10_doms/``` directory, where you can find the ```domain_to_cluster.json``` file, which you should copy to the main directory (```hierarchical-domain-adaptation/```) to run the out-of-domain evaluation of the trained model. 
+It creates a ```eval10_doms/``` directory, where you can find the ```domain_to_cluster.json```  and  ```domain_dict.json ``` files, which you should copy to the main directory (```hierarchical-domain-adaptation/```) to run the out-of-domain evaluation of the trained model. 
 
 ## 5. (Optional)  Evaluate hierarchical model out of domain
 
-Define the domains you want to evaluate on in the ```domain_names.json``` script (main directory).
+Define the domains you want to evaluate on in ```domain_names.json``` (main directory) and use the out-of-domain ```domain_dict.json```.
 
 ```
 
