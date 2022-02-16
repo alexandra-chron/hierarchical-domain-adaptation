@@ -1,5 +1,4 @@
-# Hierarchical Domain Adaptation with Adapters
-
+# Efficient Hierarchical Domain Adaptation for Pretrained Language Models
 
 Create a conda environment:
 
