@@ -161,12 +161,6 @@ class DataTrainingArguments:
             "help": "Are we using adapters"
         },
     )
-    percentage_of_domain_in_cluster: Optional[bool] = field(
-        default=False,
-        metadata={
-            "help": "Do you provide a file that specifies to what extent a dataset belongs to some clusters"
-        },
-    )
     num_domains: Optional[int] = field(
         default=None,
         metadata={
@@ -284,14 +278,7 @@ def main():
     config.adapter_size = data_args.adapter_size
     config.use_tree_structure = data_args.use_tree_structure
     config.vocab_overlap = data_args.vocab_overlap
-    config.percentage_of_domain_in_cluster = data_args.percentage_of_domain_in_cluster
-    
-    if config.percentage_of_domain_in_cluster is not None:
-        temp = np.load('internet_domain_percentage_in_each_cluster.npy', 'r')
-        idx = np.argwhere(np.all(temp[..., :] == 0, axis=0))
-        non_zero_columns = np.delete(temp, idx, axis=1)
-        config.percentage_of_domain_in_cluster = non_zero_columns.tolist()
-        
+
     if config.num_domains:
         if config.use_tree_structure:
             with open('domain_dict.json', 'r') as f:
