@@ -373,6 +373,18 @@ def fit_gmm_and_hierarchical(name_to_embeddings, class_names, first_principal_co
     for key, value in up_merge.items():
         print(" '{}': {},".format(key, value))
 
+    new_dict = {}
+
+    max_key = 0
+    for key, value in up_merge.items():
+        new_dict[str(key)] = value
+        if key > max_key:
+            max_key = key
+    new_dict[str(max_key + 1)] = -1
+
+    with open('{}/domain_dict.json'.format(config.name), 'w') as f:
+        json.dump(new_dict, f)
+
     plt.title('Hierarchical Clustering Dendrogram')
     plot_dendrogram(agg_fitted,  truncate_mode='level', labels=labels,
                     leaf_font_size=9, leaf_rotation=0)
