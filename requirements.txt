@@ -3,7 +3,7 @@ certifi==2021.5.30
 cffi==1.14.4
 chardet==3.0.4
 idna==2.10
-numpy==1.22.0
+numpy==1.19.5
 olefile==0.46
 Pillow==8.3.1
 pycosat==0.6.3
