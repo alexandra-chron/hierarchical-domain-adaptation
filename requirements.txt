@@ -23,7 +23,7 @@ six==1.15.0
 tqdm==4.54.1
 typing-extensions==3.10.0.0
 scipy==1.7.1
-urllib3==1.21.1
+urllib3==1.26.5
 tensorboard==2.6.0
 tensorboardX==2.4
 torch==1.9.0
