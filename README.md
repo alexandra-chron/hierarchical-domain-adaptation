@@ -103,12 +103,18 @@ uses code from [HuggingFace](https://github.com/huggingface/transformers) and [c
 ## Reference 
 
 ```
-@misc{chronopoulou2021efficient,
-      title={Efficient Hierarchical Domain Adaptation for Pretrained Language Models}, 
-      author={Alexandra Chronopoulou and Matthew E. Peters and Jesse Dodge},
-      year={2021},
-      eprint={2112.08786},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL}
+@inproceedings{chronopoulou-etal-2022-efficient,
+    title = "Efficient Hierarchical Domain Adaptation for Pretrained Language Models",
+    author = "Chronopoulou, Alexandra  and
+      Peters, Matthew  and
+      Dodge, Jesse",
+    booktitle = "Proceedings of the 2022 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies",
+    month = jul,
+    year = "2022",
+    address = "Seattle, United States",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2022.naacl-main.96",
+    doi = "10.18653/v1/2022.naacl-main.96",
+    pages = "1336--1351",
 }
 ```
