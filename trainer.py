@@ -1141,9 +1141,7 @@ class Trainer:
             else:
                 max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch)
                 num_train_epochs = math.ceil(args.num_train_epochs)
-                dataset_len = 0
-                for dataset in self.train_datasets:
-                    dataset_len += len(dataset)
+                dataset_len = np.sum([len(dataset) for dataset in self.train_datasets])
                 num_train_samples = dataset_len * args.num_train_epochs
         else:
             # see __init__. max_steps is set when the dataset has no __len__
